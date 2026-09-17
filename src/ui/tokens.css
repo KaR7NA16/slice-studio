@@ -1,0 +1,53 @@
+/* 设计令牌（原话#1 去 AI 感；b10 iOS 风格；b11 iOS 外壳 + 桌面密度）
+   口径：iOS 浅色系材质 + 桌面级密度；无渐变、无 emoji、无廉价大圆角卡片；
+   时间码/数字一律 tabular-nums。改样式只改这里，组件不写死值。 */
+
+:root {
+  /* 色阶（iOS 系统色） */
+  --bg: #f2f2f7;
+  --surface: #ffffff;
+  --surface-2: rgba(118, 118, 128, 0.08);
+  --text: #1c1c1e;
+  --text-2: #8e8e93;
+  --text-3: #c7c7cc;
+  --accent: #007aff;
+  --separator: rgba(60, 60, 67, 0.12);
+
+  /* 状态色（iOS 系统色） */
+  --st-ready: #34c759;
+  --st-stale: #ff9500;
+  --st-suspect: #ffcc00;
+  --st-empty: #c7c7cc;
+  --st-error: #ff3b30;
+
+  /* 密度（桌面级：行高 28–32px、字号 12–13px） */
+  --fs: 12.5px;
+  --fs-sm: 11px;
+  --fs-title: 13px;
+  --row-h: 30px;
+  --row-h-sm: 26px;
+  --pad: 8px;
+  --pad-2: 12px;
+
+  /* 形状与材质（iOS 外壳：适中圆角 + 毛玻璃） */
+  --radius: 10px;
+  --radius-sm: 6px;
+  --blur: saturate(180%) blur(20px);
+  --bar-bg: rgba(255, 255, 255, 0.72);
+
+  /* 字体 */
+  --font: -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: var(--fs) / 1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+.num, time, .sha { font-family: var(--mono); font-variant-numeric: tabular-nums; }

@@ -1,0 +1,101 @@
+/* 组件样式（值全部取自 tokens.css） */
+
+.topbar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: var(--pad-2);
+  height: 44px; padding: 0 var(--pad-2);
+  background: var(--bar-bg);
+  backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  border-bottom: 1px solid var(--separator);
+}
+.topbar .title { font-size: var(--fs-title); font-weight: 600; letter-spacing: 0.2px; }
+.topbar .spacer { flex: 1; }
+.iconbtn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: var(--row-h-sm); padding: 0 10px;
+  border: none; border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--accent);
+  font: inherit; cursor: pointer;
+}
+.iconbtn:active { opacity: 0.6; }
+
+/* 待办条（b5：只回答「现在该干什么」） */
+.todo {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 6px var(--pad-2);
+  background: var(--surface);
+  border-bottom: 1px solid var(--separator);
+}
+.todo .label { color: var(--text-2); font-size: var(--fs-sm); flex: none; }
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 22px; padding: 0 8px;
+  border-radius: 11px; background: var(--surface-2);
+  color: var(--text); font-size: var(--fs-sm);
+  white-space: nowrap; cursor: default;
+}
+.chip.err { color: var(--st-error); }
+.chip.warn { color: var(--st-stale); }
+
+/* 主体 */
+.main { max-width: 1080px; margin: 0 auto; padding: var(--pad-2); display: grid; gap: var(--pad-2); }
+.section-title { font-size: var(--fs-sm); color: var(--text-2); padding: 0 2px; }
+
+/* 卡片（iOS 分组列表：白底、适中圆角、细分隔线） */
+.card { background: var(--surface); border-radius: var(--radius); overflow: hidden; }
+.card + .card { margin-top: var(--pad); }
+.card-head {
+  display: flex; align-items: center; gap: 8px;
+  min-height: 34px; padding: 4px var(--pad-2);
+  font-weight: 600; border-bottom: 1px solid var(--separator);
+}
+.card-head .sub { font-weight: 400; color: var(--text-2); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 步骤行（桌面密度） */
+.step {
+  display: flex; align-items: center; gap: 8px;
+  height: var(--row-h); padding: 0 var(--pad-2);
+  border-bottom: 1px solid var(--separator);
+}
+.step:last-child { border-bottom: none; }
+.step .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.step .name { width: 76px; flex: none; }
+.step .id { color: var(--text-3); font-size: var(--fs-sm); width: 34px; flex: none; }
+.step .state { width: 52px; flex: none; font-size: var(--fs-sm); }
+.step .reason { color: var(--text-2); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.dot.ready { background: var(--st-ready); } .state.ready { color: var(--st-ready); }
+.dot.stale { background: var(--st-stale); } .state.stale { color: var(--st-stale); }
+.dot.suspect { background: var(--st-suspect); } .state.suspect { color: var(--text-2); }
+.dot.empty { background: var(--st-empty); } .state.empty { color: var(--text-2); }
+.dot.error { background: var(--st-error); } .state.error { color: var(--st-error); }
+
+/* clip 缩进组 */
+.clip-group { border-top: 1px solid var(--separator); background: var(--surface); }
+.clip-title {
+  display: flex; align-items: center; gap: 6px;
+  height: var(--row-h); padding: 0 var(--pad-2) 0 24px;
+  font-size: var(--fs-sm); color: var(--text-2);
+}
+.clip-group .step { padding-left: 24px; }
+
+/* 素材库 */
+details.lib { background: var(--surface); border-radius: var(--radius); overflow: hidden; }
+details.lib summary {
+  display: flex; align-items: center; gap: 8px;
+  min-height: 34px; padding: 4px var(--pad-2);
+  font-weight: 600; cursor: pointer; list-style: none;
+}
+details.lib summary::-webkit-details-marker { display: none; }
+details.lib summary .count { font-weight: 400; color: var(--text-2); font-size: var(--fs-sm); }
+.lib-item {
+  display: flex; align-items: center; gap: 8px;
+  height: var(--row-h-sm); padding: 0 var(--pad-2);
+  border-top: 1px solid var(--separator);
+  font-size: var(--fs-sm);
+}
+.lib-item .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-item .g { color: var(--text-2); flex: none; }
+.lib-item .b { color: var(--text-3); flex: none; margin-left: auto; }
+
+.empty-hint { padding: 28px var(--pad-2); text-align: center; color: var(--text-2); }

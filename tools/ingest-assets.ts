@@ -63,7 +63,7 @@ function nextId(prefix: string): string {
   let max = 0;
   for (const id of usedIds) {
     const m = id.match(/^([a-z]+)-(\d+)$/);
-    if (m && m[1] === prefix) max = Math.max(max, parseInt(m[2], 10));
+    if (m && m[1] === prefix && m[2]) max = Math.max(max, parseInt(m[2], 10));
   }
   let n = max + 1;
   let id = `${prefix}-${String(n).padStart(3, "0")}`;
@@ -95,7 +95,7 @@ for (const k of KINDS) {
     }
     const rel = path.relative(base, f);
     const sep = rel.includes("/") ? "/" : path.sep;
-    const group = rel.includes(sep) ? rel.split(sep)[0] : null;
+    const group = rel.includes(sep) ? (rel.split(sep)[0] ?? null) : null;
     const hash = await sha256(f);
     const id = idBySha.get(hash) ?? nextId(k.prefix);
     items.push({

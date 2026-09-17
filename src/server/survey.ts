@@ -125,16 +125,21 @@ export async function survey(root: string): Promise<Survey> {
   return { jobs, clips, todo };
 }
 
+// 待办条只回答「现在该干什么」（b5），所以异常优先于「未跑」：
+// 先收全部 error/stale（它们说明有东西坏了或过期了，必须被看见），
+// 一条异常都没有时，才提示最靠前的未跑步——只提一条，不刷屏。
+// 为什么不能边走边 break（P3-1）：steps 是有序的，排在前面的未跑步会把
+// 排在后面的 error/stale 挡在待办条外，而卡片视图照样能看见 → 两处视图不一致。
 function collectTodo(todo: TodoItem[], owner: string, steps: StepState[]): void {
+  const before = todo.length;
   for (const st of steps) {
     if (st.status === "error") {
       todo.push({ text: `${st.title} 出错：${st.reason ?? "未知原因"}`, owner, step: st.step });
     } else if (st.status === "stale") {
       todo.push({ text: `${st.title} 待重跑（${st.reason ?? "上游已变"}）`, owner, step: st.step });
-    } else if (st.status === "empty") {
-      // 只提最靠前的未跑步，不刷屏
-      todo.push({ text: `${st.title} 未跑`, owner, step: st.step });
-      break;
     }
   }
+  if (todo.length > before) return; // 本 owner 已有条目，不再提示「未跑」
+  const first = steps.find((s) => s.status === "empty");
+  if (first) todo.push({ text: `${first.title} 未跑`, owner, step: first.step });
 }

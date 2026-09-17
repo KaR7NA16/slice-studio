@@ -11,7 +11,9 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { mergeDecisions } from "../src/server/overrides.ts";
 import { readJson } from "../src/server/jsonfile.ts";
-import type { AiDraftFile, OverlayFile, RunRecord, S03View, SentencesFile, Survey } from "../src/shared/types.ts";
+import { survey } from "../src/server/survey.ts";
+import { finishStep, inputRef } from "../src/steps/lib.ts";
+import type { AiDraftFile, ClipFile, OverlayFile, RunRecord, S03View, SentencesFile, StepFile, Survey } from "../src/shared/types.ts";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const VROOT = path.join(tmpdir(), "slice-verify2");
@@ -176,7 +178,112 @@ async function main(): Promise<void> {
   // 孤儿键据实亮出
   const m3 = mergeDecisions(view.sentences.map(({ keep: _k, source: _s, reason: _r, ...s }) => s), null, { schema: 1, decisions: { "999": { keep: false, at: "" } } });
   check("对不上句子的覆盖键亮为 orphans", m3.orphans.includes("999"));
+  // AI 侧孤儿同样要亮（P3-3）：ai.json 里对不上当前句流的键，s00 重解析后就会出现。
+  // 它和人工键一样是「对某个句子做过的判断」，凭空消失就是留痕丢失。
+  // 一条断言同时管两件事：两侧孤儿都收得到（888 只在 AI 侧、999 只在人工侧）、
+  // 同一 id 两侧都出现时只报一次（777）。**故意不拆开**——单测「只报一次」时，
+  // 「只收人工一侧」的错误实现也会通过（天然不重复），那种守护抓不住回归。
+  const baseOnly = view.sentences.map(({ keep: _k, source: _s, reason: _r, ...s }) => s);
+  const m4 = mergeDecisions(
+    baseOnly,
+    { schema: 1, model: "simulate", at: "", decisions: [{ id: "777", keep: false, reason: "" }, { id: "888", keep: false, reason: "AI 对旧句子的判断" }] },
+    { schema: 1, decisions: { "777": { keep: true, at: "" }, "999": { keep: false, at: "" } } },
+  );
+  check("AI 侧与人工侧的孤儿都亮，且同 id 只报一次（P3-3 回归）",
+    m4.orphans.slice().sort().join(",") === "777,888,999", m4.orphans.join(","));
   await rm(aiPath, { force: true });
+
+  // F2. 回归（P1-1）：同一步多模式不得互相覆盖输入集
+  //   背景：draft 只登记 s03/sentences.json；若 finishStep 的 inputs 是直接覆盖，
+  //   build 登记的 clip.json 与 s00/sentences.json 会被抹掉 → 此后改片段区间或改 s00 句流，
+  //   s03 都仍读 ready（假就绪）。本机无 LLM，故按 draft 的真实登记方式直调 finishStep
+  //   （与上面手写 ai.json 同性质：只模拟「谁调用了」，不模拟机制本身）。
+  const stepPath = path.join(VROOT, "work", "clips", clipId, "s03", "step.json");
+  const keysOf = async (): Promise<string[]> =>
+    ((await readJson<StepFile>(stepPath))?.inputs ?? []).map((i) => i.key).sort();
+  const keysBefore = await keysOf();
+  check("build 后 s03 登记了 clip.json + s00/sentences.json",
+    keysBefore.includes("clip.json") && keysBefore.includes("s00/sentences.json"), keysBefore.join(","));
+  await finishStep(VROOT, `clips/${clipId}`, "s03",
+    [await inputRef(VROOT, "sentences.json", `clips/${clipId}/s03/sentences.json`)], ["ai.json"]);
+  const keysAfter = await keysOf();
+  check("draft 登记后 build 的输入未被抹掉（P1-1 回归）",
+    keysAfter.includes("clip.json") && keysAfter.includes("s00/sentences.json"), keysAfter.join(","));
+  check("draft 自己的输入也在（并集而非替换）", keysAfter.includes("sentences.json"), keysAfter.join(","));
+  // 并集必须真的让上游变化可被侦测，否则只是记了个没用的字段
+  const clipPath = path.join(VROOT, "work", "clips", clipId, "clip.json");
+  const clipOrig = await readFile(clipPath, "utf8");
+  await writeFile(clipPath, clipOrig.replace(/"end": [\d.]+/, '"end": 12.5'), "utf8");
+  const afterDraftState = stepState(await api<Survey>("/api/survey"), "clips", clipId, "s03");
+  check("draft 之后改 clip.json → s03 stale（P1-1 回归核心）", afterDraftState === "stale", afterDraftState);
+  await writeFile(clipPath, clipOrig, "utf8");
+  const restoredState = stepState(await api<Survey>("/api/survey"), "clips", clipId, "s03");
+  check("还原 clip.json → s03 自动回 ready", restoredState === "ready", restoredState);
+
+  // F3. 顺序无关性（P2-4）：并集语义必须对调用顺序不敏感。
+  //   为什么单独测：P1-1 之所以能藏很久，正是因为原用例把 draft 排在最后，
+  //   只覆盖了「build 在前」这一种序列。这里用两个互不相干的 scratch owner
+  //   把两种序列各跑一遍，断言最终登记的输入集**完全相同**。
+  //   落在 work/scratch/ 下（不是 work/clips/），survey 不扫这个目录，不会污染后续断言。
+  const seqKeys = async (owner: string, order: "build-first" | "draft-first"): Promise<string[]> => {
+    const buildSide = [
+      await inputRef(VROOT, "clip.json", `clips/${clipId}/clip.json`),
+      await inputRef(VROOT, "s00/sentences.json", `jobs/${jobId}/s00/sentences.json`),
+    ];
+    const draftSide = [await inputRef(VROOT, "sentences.json", `clips/${clipId}/s03/sentences.json`)];
+    for (const side of order === "build-first" ? [buildSide, draftSide] : [draftSide, buildSide]) {
+      await finishStep(VROOT, owner, "s03", side, []);
+    }
+    const file = await readJson<StepFile>(path.join(VROOT, "work", owner, "s03", "step.json"));
+    return (file?.inputs ?? []).map((i) => i.key).sort();
+  };
+  const seqA = await seqKeys("scratch/p24-build-first", "build-first");
+  const seqB = await seqKeys("scratch/p24-draft-first", "draft-first");
+  check("两种调用顺序得到同一输入集（P2-4 顺序无关）", seqA.join(",") === seqB.join(","), `${seqA.join(",")} vs ${seqB.join(",")}`);
+  check("build-first：build 的输入未被后跑的 draft 抹掉", seqA.includes("clip.json") && seqA.includes("s00/sentences.json"), seqA.join(","));
+  check("draft-first：draft 的输入未被后跑的 build 抹掉", seqB.includes("sentences.json"), seqB.join(","));
+  check("两个序列都含全部 3 条输入（并集无遗漏）", seqA.length === 3 && seqB.length === 3, `${seqA.length} / ${seqB.length}`);
+
+  // F4. 待办条不被遮蔽（P3-1）：同 owner 里排在前面的未跑步，不得挡住排在后面的 error。
+  //   构造的正是真实会发生的形态——s02 没跑（empty），s03 跑挂了（error）。
+  //   旧逻辑遇 empty 即 break，于是待办条只会说「s02 未跑」，而 s03 的 error 消失；
+  //   卡片视图却照样显示 s03 出错 → 两处视图不一致。
+  const todoClip = "p31-todo";
+  const todoDir = path.join(VROOT, "work", "clips", todoClip);
+  await mkdir(path.join(todoDir, "s03"), { recursive: true });
+  await writeFile(path.join(todoDir, "clip.json"), JSON.stringify({
+    schema: 1, id: todoClip, job_id: jobId, title: "待办条用例", start: 0, end: 1, fps: null,
+  } satisfies ClipFile), "utf8");
+  await writeFile(path.join(todoDir, "s03", "step.json"), JSON.stringify({
+    schema: 1, step: "s03", finished_at: new Date().toISOString(), inputs: [], outputs: [], error: "模拟失败：句流为空",
+  } satisfies StepFile), "utf8");
+  const todoMine = (await survey(VROOT)).todo.filter((t) => t.owner === todoClip);
+  check("s02 未跑不遮蔽 s03 的 error（P3-1 回归）",
+    todoMine.some((t) => t.step === "s03" && t.text.includes("出错")), JSON.stringify(todoMine));
+  check("s03 有 error 时不再额外提示「s02 未跑」（不刷屏）",
+    !todoMine.some((t) => t.step === "s02"), JSON.stringify(todoMine));
+
+  // F5. 参数校验（P3-5）：缺 runId 必须显式失败。
+  //   旧行为：runFile() 拼出 "undefined.json"，patchRun 读不到就静默 return，
+  //   进度与完成状态一个都不落盘，子进程仍以 0 退出 —— 调用方看到的是「成功」。
+  //   两个细节是**故意**的，少了任何一个这条断言就抓不住回归：
+  //   ① 用真实存在的 jobId + s00（不是随便一个 owner）——否则 runS00 自己会抛
+  //      「job 不存在」，退出码本来就不是 0，断言 `!== 0` 会白过（第一版就踩了这个坑）。
+  //   ② 断言退出码恰为 2（用法错误的约定）而不是「非 0」，才能把「校验拦下」和
+  //      「下游自己崩了」区分开。
+  //   副作用：修复生效时校验在最前面拦下，s00 根本不会执行，对本 root 零改动。
+  const bad = await new Promise<{ code: number; err: string }>((resolve) => {
+    const c = spawn(
+      process.execPath,
+      [path.join(ROOT, "src", "steps", "run.ts"), VROOT, `jobs/${jobId}`, "s00", "", ""],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+    let err = "";
+    c.stderr.on("data", (d) => (err += String(d)));
+    c.on("exit", (code) => resolve({ code: code ?? -1, err }));
+  });
+  check("缺 runId 时 run.ts 以用法错误退出（P3-5 回归）",
+    bad.code === 2 && bad.err.includes("用法"), `${bad.code} / ${bad.err.trim()}`);
 
   // G. 上游变动传播（判据A 后半）：source.srt 追加一句 → s00 stale → s01 suspect
   const srcSnap = path.join(VROOT, "work", "jobs", jobId, "source.srt");

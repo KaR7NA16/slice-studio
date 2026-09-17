@@ -15,7 +15,10 @@ export async function inputRef(root: string, key: string, relToWork: string): Pr
   return { key, path: relToWork, fingerprint: (await fingerprint(path.join(root, "work", relToWork))) ?? "" };
 }
 
-// step.json 只存事实（b43）；outputs 与既有记录并集（同一步可先 build 再 draft）
+// step.json 只存事实（b43）；inputs 与 outputs 一律与既有记录**并集**。
+// 为什么 inputs 也必须并集：同一步可先 build 再 draft，两者登记的输入集不同
+// （build 挂 clip.json + s00/sentences.json，draft 挂 s03/sentences.json）。
+// 若 inputs 直接覆盖，后跑的模式会抹掉前者的输入 → survey 再也侦测不到那些上游的变化（假 ready）。
 export async function finishStep(
   root: string,
   owner: string,
@@ -26,11 +29,14 @@ export async function finishStep(
   const dir = stepDir(root, owner, step);
   await mkdir(dir, { recursive: true });
   const prev = await readJson<StepFile>(path.join(dir, "step.json"));
+  const mergedInputs = new Map<string, StepInputRef>();
+  for (const i of prev?.inputs ?? []) mergedInputs.set(i.key, i);
+  for (const i of inputs) mergedInputs.set(i.key, i); // 同 key 取本次（更新的指纹）
   const file: StepFile = {
     schema: 1,
     step,
     finished_at: new Date().toISOString(),
-    inputs,
+    inputs: [...mergedInputs.values()],
     outputs: [...new Set([...(prev?.outputs ?? []), ...outputs])],
   };
   await writeJsonAtomic(path.join(dir, "step.json"), file);

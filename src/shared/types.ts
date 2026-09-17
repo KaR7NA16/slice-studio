@@ -118,7 +118,7 @@ export interface MergedSentence extends Sentence {
 export interface S03View {
   clip: ClipFile;
   sentences: MergedSentence[];
-  orphans: string[]; // 覆盖层里已对不上句子的键（s00 重解析后可能出现），据实亮出
+  orphans: string[]; // 已对不上句子的键（人工覆盖层 + AI 决策两侧都收；s00 重解析后可能出现），据实亮出
   ai: { model: string; at: string } | null;
 }
 

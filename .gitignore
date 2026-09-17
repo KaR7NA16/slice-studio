@@ -9,11 +9,16 @@ dist/
 data/
 work/
 
-# 外部工具二进制（ffmpeg 自带固定版，不入库）
+# 外部工具二进制（自带固定版，不入库）
 tools/ffmpeg/
+tools/node/
+tools/python/
 
 # 本机密钥配置（模板 config.example.json 入库）
 config.json
+
+# 项目记忆链（agent 生成，每会话重写；含本机绝对路径，不随仓库分发）
+.workbuddy-ai/
 
 # 其他
 *.log

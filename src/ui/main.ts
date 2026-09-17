@@ -338,7 +338,7 @@ async function viewClip(id: string): Promise<void> {
       return;
     }
     const kept = view.sentences.filter((s) => s.keep).length;
-    infoEl.textContent = `句流（留 ${kept} / 共 ${view.sentences.length} 句${view.ai ? `，AI 初稿 ${view.ai.model}` : ""}${view.orphans.length ? `，${view.orphans.length} 条覆盖已对不上句子` : ""}）`;
+    infoEl.textContent = `句流（留 ${kept} / 共 ${view.sentences.length} 句${view.ai ? `，AI 初稿 ${view.ai.model}` : ""}${view.orphans.length ? `，${view.orphans.length} 条决策已对不上句子` : ""}）`;
     listEl.innerHTML = view.sentences
       .map((s, idx) => `<div class="sent${s.keep ? "" : " drop"}" data-idx="${idx}">
         <span class="tc num">${tc(s.start)}<br/>${tc(s.end)}</span>

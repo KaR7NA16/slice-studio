@@ -56,6 +56,8 @@ export interface ClipSurvey {
   id: string;
   job_id: string;
   title: string;
+  start: number; // float 秒（b40）
+  end: number;
   steps: StepState[]; // clip 级步骤
 }
 
@@ -69,6 +71,84 @@ export interface Survey {
   jobs: JobSurvey[];
   clips: ClipSurvey[];
   todo: TodoItem[];
+}
+
+// ---- 句子事实（s00 解析 / s03 句级输出，b21；b40 float 秒） ----
+
+export interface Sentence {
+  id: string; // 在 job 字幕内的序号，s00 重解析前稳定，覆盖层按它键控
+  start: number;
+  end: number;
+  text: string;
+}
+
+export interface SentencesFile {
+  schema: 1;
+  sentences: Sentence[];
+}
+
+// s01 候选 = 人工定稿事实（b1 默认人工；AI 候选属阶段 3）
+export interface CandidatesFile {
+  schema: 1;
+  source: "human";
+  clips: { clip_id: string; title: string; start: number; end: number; created_at: string }[];
+}
+
+// ---- s03：AI 初稿 与 人工覆盖层（b29/b46：分离存放，重跑 AI 不丢人工） ----
+
+export interface AiDraftFile {
+  schema: 1;
+  model: string;
+  at: string;
+  decisions: { id: string; keep: boolean; reason: string }[];
+}
+
+export interface OverlayFile {
+  schema: 1;
+  decisions: Record<string, { keep: boolean; at: string }>;
+}
+
+// 合并读模型（现算不落盘）：人工 > AI > 默认保留
+export interface MergedSentence extends Sentence {
+  keep: boolean;
+  source: "human" | "ai" | "default";
+  reason: string | null; // AI 给的理由（人工改判后仍留作上下文）
+}
+
+export interface S03View {
+  clip: ClipFile;
+  sentences: MergedSentence[];
+  orphans: string[]; // 覆盖层里已对不上句子的键（s00 重解析后可能出现），据实亮出
+  ai: { model: string; at: string } | null;
+}
+
+// ---- run 记录（b53 触发 + 心跳：updated_at 即心跳，失联由读侧现算，不落盘） ----
+
+export interface RunRecord {
+  id: string;
+  owner: string; // "jobs/<id>" | "clips/<id>"
+  step: string;
+  mode: string | null;
+  status: "running" | "done" | "error";
+  started_at: string;
+  updated_at: string;
+  finished_at: string | null;
+  message: string;
+  error: string | null;
+}
+
+// ---- 创建请求 ----
+
+export interface NewJob {
+  video_path: string;
+  srt_path: string | null;
+}
+
+export interface NewClip {
+  job_id: string;
+  title: string;
+  start: number;
+  end: number;
 }
 
 // ---- 素材库（data/library.json，b33） ----

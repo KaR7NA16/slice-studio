@@ -15,6 +15,10 @@ const exe = path.join(
 const browser = await chromium.launch({ executablePath: exe });
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  page.on("console", (m) => {
+    if (m.type() === "error") console.log("[console.error]", m.text());
+  });
+  page.on("pageerror", (e) => console.log("[pageerror]", String(e)));
   await page.goto(url, { waitUntil: "networkidle" });
   await page.waitForSelector(".topbar .title", { timeout: 5000 });
   // 展开素材库的 <details> 让截图包含真实条目

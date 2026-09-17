@@ -13,6 +13,8 @@ const PATHS: Record<string, string> = {
   play: "M8 5.5v13l10-6.5z",
   font: "M5 19L12 5l7 14M7.5 14h9",
   plus: "M12 5v14M5 12h14",
+  back: "M15 5l-7 7 7 7",
+  spark: "M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4L12 3z",
 };
 
 export function icon(name: keyof typeof PATHS, size = 13): string {

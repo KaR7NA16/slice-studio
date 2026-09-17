@@ -115,7 +115,7 @@ export async function survey(root: string): Promise<Survey> {
     const clip = await readJson<ClipFile>(path.join(dir, "clip.json"));
     if (!clip) continue;
     const steps = await surveyOwner(workRoot, dir, "clip");
-    clips.push({ id: clip.id, job_id: clip.job_id, title: clip.title, steps });
+    clips.push({ id: clip.id, job_id: clip.job_id, title: clip.title, start: clip.start, end: clip.end, steps });
     collectTodo(todo, clip.id, steps);
   }
 

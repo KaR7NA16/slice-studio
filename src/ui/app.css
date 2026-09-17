@@ -99,3 +99,94 @@ details.lib summary .count { font-weight: 400; color: var(--text-2); font-size: 
 .lib-item .b { color: var(--text-3); flex: none; margin-left: auto; }
 
 .empty-hint { padding: 28px var(--pad-2); text-align: center; color: var(--text-2); }
+
+/* ---- 阶段 2：写 + 触发 ---- */
+
+a.link { color: inherit; text-decoration: none; }
+a.card-head.link:hover { background: var(--surface-2); }
+
+.clip-links { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px var(--pad-2); border-top: 1px solid var(--separator); }
+.clip-link {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 24px; padding: 0 9px; border-radius: 12px;
+  background: var(--surface-2); color: var(--text); font-size: var(--fs-sm);
+  text-decoration: none;
+}
+.clip-link:hover { color: var(--accent); }
+
+/* 表单卡（新建任务 / 建片段 / 操作行通用） */
+.form-card {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px var(--pad-2);
+}
+.text {
+  flex: 1 1 220px; height: var(--row-h-sm); padding: 0 10px;
+  border: 1px solid var(--separator); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text); font: inherit; font-size: var(--fs-sm);
+  outline: none;
+}
+.text:focus { border-color: var(--accent); }
+.btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: var(--row-h-sm); padding: 0 12px;
+  border: none; border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--accent);
+  font: inherit; font-size: var(--fs-sm); cursor: pointer; flex: none;
+}
+.btn.primary { background: var(--accent); color: #fff; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn:not(:disabled):active { opacity: 0.65; }
+.minibtn {
+  height: 22px; min-width: 30px; padding: 0 7px;
+  border: 1px solid var(--separator); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--accent);
+  font: inherit; font-size: var(--fs-sm); cursor: pointer;
+}
+.minibtn:disabled { opacity: 0.45; }
+.hint { color: var(--text-2); font-size: var(--fs-sm); }
+
+.steps-line { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px var(--pad-2); }
+.actions { display: flex; align-items: center; gap: 8px; padding: 0 var(--pad-2) 10px; }
+
+.clip-row {
+  display: flex; align-items: center; gap: 8px;
+  min-height: var(--row-h); padding: 4px var(--pad-2);
+  border-bottom: 1px solid var(--separator); font-size: var(--fs-sm);
+}
+.clip-row:last-child { border-bottom: none; }
+.clip-row:hover { background: var(--surface-2); }
+.clip-row .t { font-weight: 500; }
+.clip-row .steps-inline { margin-left: auto; display: flex; gap: 4px; }
+
+/* 句流（任务页选区间 + s03 工作台共用） */
+.sents { position: relative; max-height: 52vh; overflow-y: auto; }
+.sent {
+  display: grid; grid-template-columns: 92px 1fr auto; align-items: center; gap: 10px;
+  min-height: var(--row-h); padding: 4px var(--pad-2);
+  border-bottom: 1px solid var(--separator);
+}
+.sent:last-child { border-bottom: none; }
+.sent .tc { color: var(--text-3); font-size: 11px; line-height: 1.35; cursor: pointer; flex: none; }
+.sent .txt { overflow-wrap: anywhere; cursor: pointer; }
+.sent .body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.sent .side { display: flex; align-items: center; gap: 6px; flex: none; }
+.sent .reason-line { color: var(--text-2); font-size: var(--fs-sm); }
+.sent.pick .txt, .sent.pick .tc { cursor: default; }
+.sent.in-sel { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.sent.drop .txt { color: var(--text-3); text-decoration: line-through; }
+.sent.cur { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+.pick-btns { display: flex; gap: 4px; flex: none; }
+.badge {
+  height: 18px; padding: 0 5px; border-radius: 4px;
+  display: inline-flex; align-items: center;
+  background: var(--surface-2); color: var(--text-2); font-size: 10px; flex: none;
+}
+.badge.human { color: var(--accent); }
+
+/* 播放器 */
+.player {
+  width: 100%; max-height: 42vh; background: #000;
+  border-radius: var(--radius); display: block;
+}
+.ws { max-width: 900px; }
+

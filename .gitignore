@@ -1,0 +1,20 @@
+# 留档（删除前的旧实现，可随时整个删）
+_attic/
+
+# 依赖与构建产物
+node_modules/
+dist/
+
+# 运行时工作文件（素材索引、任务产物）
+data/
+work/
+
+# 外部工具二进制（ffmpeg 自带固定版，不入库）
+tools/ffmpeg/
+
+# 其他
+*.log
+.DS_Store
+
+# 文档留在本机，不进远端
+docs/

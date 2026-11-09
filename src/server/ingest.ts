@@ -65,7 +65,11 @@ export async function ingestLibrary(dataRoot: string, assetsDir: string): Promis
 
   const current = await readJson<Library>(shipped(dataRoot, "data/library.json"));
   const idBySha = new Map((current?.items ?? []).map((it) => [it.sha256, it.id]));
+  // 同一份音频常被放进多个 mood 目录（同 sha、不同路径）。只按 sha 找回 id 会让这些条目
+  // 在「重新入库」时塌缩成同一个 id，所以先按路径认领，sha 只作路径变动时的兜底。
+  const idByPath = new Map((current?.items ?? []).map((it) => [it.path, it.id]));
   const usedIds = new Set((current?.items ?? []).map((it) => it.id));
+  const claimed = new Set<string>();
   const items: LibraryItem[] = [];
 
   for (const k of KINDS) {
@@ -84,13 +88,18 @@ export async function ingestLibrary(dataRoot: string, assetsDir: string): Promis
       const sep = rel.includes("/") ? "/" : path.sep;
       const group = rel.includes(sep) ? (rel.split(sep)[0] ?? null) : null;
       const hash = await sha256(f);
-      const id = idBySha.get(hash) ?? nextId(k.prefix, usedIds);
+      const portablePath = toPortable(dataRoot, f);
+      // 旧索引里可能已经有重复 id（早期按 sha 找回时塌缩过）。候选 id 若本轮已发出，
+      // 就重新分配一个，让「重新入库」本身把坏索引自愈回来，而不是永久保留坏状态。
+      const candidate = idByPath.get(portablePath) ?? idBySha.get(hash);
+      const id = candidate && !claimed.has(candidate) ? candidate : nextId(k.prefix, usedIds);
+      claimed.add(id);
       items.push({
         id,
         kind: k.kind,
         group,
         title: path.basename(f, ext),
-        path: toPortable(dataRoot, f),
+        path: portablePath,
         sha256: hash,
         bytes: (await stat(f)).size,
       });

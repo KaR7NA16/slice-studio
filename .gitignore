@@ -19,6 +19,10 @@ tools/python/
 # 加载方式：Separator(model="htdemucs", repo=<数据根>/models/demucs) → LocalRepo，零网络
 models/
 
+# 项目素材库（97 首 mp3 / 484MB，不入库）
+# 索引在 data/library.json，source_root 记相对路径 assets，指向可在界面改。
+assets/
+
 # 本机密钥配置（模板 config.example.json 入库）
 config.json
 

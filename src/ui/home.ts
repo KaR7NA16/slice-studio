@@ -52,7 +52,7 @@ export async function viewHome(rerender: () => void): Promise<void> {
       ${archived ? `<div id="archived"><div class="section-title">已归档</div>${archived}</div>` : ""}
       <div class="section-title">素材库（${esc(library.source_root)}）</div>
       <div class="card form-card">
-        <input class="text" id="lib-root" placeholder="素材目录的完整路径（只登记，不复制文件）" value="${esc(library.source_root === "（未入库）" ? "" : library.source_root)}" />
+        <input class="text" id="lib-root" placeholder="素材目录（只登记，不复制文件）；放入新 bgm / 字体 / 视频后点重新入库" value="${esc(library.source_root === "（未入库）" ? "" : library.source_root)}" />
         <button class="btn" id="lib-go">重新入库</button>
         <span class="hint" id="lib-msg"></span>
       </div>

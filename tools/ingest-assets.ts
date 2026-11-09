@@ -1,9 +1,9 @@
 // 素材入库的命令行入口。界面走 POST /api/library/ingest，逻辑在 src/server/ingest.ts。
 // 运行：node tools/ingest-assets.ts [素材目录] [数据根]
-// 不传参时用这台机器上的旧素材目录，数据根是当前目录。
+// 不传参时用项目内 assets/，数据根是当前目录；指向可改，界面走 POST /api/library/ingest。
 import { ingestLibrary } from "../src/server/ingest.ts";
 
-const assets = process.argv[2] ?? "<old-repo>/assets";
+const assets = process.argv[2] ?? "assets";
 const dataRoot = process.argv[3] ?? process.cwd();
 const lib = await ingestLibrary(dataRoot, assets);
 const byKind = new Map<string, number>();

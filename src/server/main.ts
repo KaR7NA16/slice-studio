@@ -31,6 +31,7 @@ import { EMPTY_OVERLAY, mergeDecisions } from "./overrides.ts";
 import { preview } from "./preview.ts";
 import { getRun, listRuns, RunBusyError, startRun } from "./runs.ts";
 import { ingestLibrary } from "./ingest.ts";
+import { listDir, statPath } from "./fsbrowse.ts";
 import { removeJob, safeJobId, safeOwner, updateCard } from "./jobcard.ts";
 import { healPyvenv } from "./portable.ts";
 import { readLibrary } from "./library.ts";
@@ -385,6 +386,25 @@ const server = createServer(async (req, res) => {
       } catch (e) {
         return sendErr(res, 400, e instanceof Error ? e.message : String(e));
       }
+    }
+    // 目录浏览（b1 入口）：只读、单层、不递归。浏览器拿不到真实路径，入口只能走这里。
+    if (url === "/api/fs/list" && req.method === "GET") {
+      const sp = new URL(req.url ?? "/", "http://127.0.0.1").searchParams;
+      const modeRaw = sp.get("mode") ?? "video";
+      const mode = modeRaw === "video" || modeRaw === "srt" || modeRaw === "dir" ? modeRaw : null;
+      if (!mode) return sendErr(res, 400, `mode 非法：${modeRaw}`);
+      try {
+        return sendJson(res, await listDir(sp.get("path"), mode));
+      } catch (e) {
+        const err = e as Error & { code?: number };
+        return sendErr(res, err.code ?? 500, err.message);
+      }
+    }
+    if (url === "/api/fs/stat" && req.method === "GET") {
+      const sp = new URL(req.url ?? "/", "http://127.0.0.1").searchParams;
+      const p = sp.get("path") ?? "";
+      if (!p.trim()) return sendErr(res, 400, "path 必填");
+      return sendJson(res, await statPath(p));
     }
     if (url === "/api/llm") {
       // 密钥不出进程：GET 只回掩码视图（key_hint），不回明文

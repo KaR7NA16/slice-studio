@@ -228,6 +228,11 @@ let cleanupWarn = "";
 try {
   browser = await chromium.launch({ executablePath: exe });
   const page = await browser.newPage();
+  let nativeDialogs = 0;
+  page.on("dialog", (d) => {
+    nativeDialogs++;
+    void d.dismiss();
+  });
   // 抓 JS 运行时错误的唯一手段
   page.on("pageerror", (e) => errs.push("pageerror: " + String(e)));
   page.on("console", (m) => {
@@ -285,19 +290,21 @@ try {
   check("待办条文案指向「产物丢失」", miss.every((c) => c.text.includes("产物丢失")), true);
   check("待办条配色是 missing 色（此前靠嗅探文案判样式，新增一类会静默落回默认灰）", miss[0]?.color, MISSING_RGB);
 
-  // ============ B. P1-4：clip 页内联 chip 的圆点（同一类静默失败的第二处）============
-  console.log("[B] P1-4：clip 页步骤 chip 的圆点");
+  // ============ B. P1-4：clip 页 tab 状态圆点（同一类静默失败的第二处）============
+  // 旧版这里查的是 .steps-line .chip，状态被印了两次（一行文字 + tab 圆点）；v2.8 合并成 tab 圆点一处。
+  console.log("[B] P1-4：clip 页 tab 的状态圆点");
   await page.goto(`${base}/#/clip/ui-c2`);
-  await page.waitForSelector(".steps-line .chip");
-  const chipDots = await page.$$eval(".steps-line .chip", (els) =>
+  await page.waitForSelector(".tabs .tab");
+  const chipDots = await page.$$eval(".tabs .tab", (els) =>
     els.map((el) => {
-      const dot = el.querySelector(".dot") as HTMLElement;
-      return { cls: dot.className, bg: getComputedStyle(dot).backgroundColor };
-    }),
+      const dot = el.querySelector(".dot") as HTMLElement | null;
+      return { id: (el.querySelector(".tab-id")?.textContent ?? "").trim(), cls: dot?.className ?? "", bg: dot ? getComputedStyle(dot).backgroundColor : "" };
+    }).filter((x) => x.id),
   );
-  check("s03 chip 带 missing 类", chipDots.some((c) => c.cls === "dot missing"), true);
-  check("s03 chip 圆点有背景色", chipDots.filter((c) => c.cls === "dot missing").every((c) => c.bg === MISSING_RGB), true);
-  check("s02 chip 仍是 empty（没被 missing 连累）", chipDots.some((c) => c.cls === "dot empty"), true);
+  check("s03 tab 带 missing 类", chipDots.some((c) => c.cls === "dot missing"), true);
+  check("s03 tab 圆点有背景色", chipDots.filter((c) => c.cls === "dot missing").every((c) => c.bg === MISSING_RGB), true);
+  check("s02 tab 仍是 empty（没被 missing 连累）", chipDots.some((c) => c.cls === "dot empty"), true);
+  check("状态只印一次（页内没有第二条 steps-line）", await page.$$eval(".steps-line", (els) => els.length), 0);
 
   // ============ C. 设置页：草稿不丢 + 落盘 + 不回显 ============
   console.log("[C] 设置页：填 key → 触发重画 → 草稿必须还在 → 保存必须落盘");
@@ -566,7 +573,7 @@ try {
   check("确认页列出将写入的文件", modalText.includes("clips/ui-c1/s03/sentences.json"), true);
   check("确认页有「重跑后会被标脏的下游」一栏", modalText.includes("重跑后会被标脏的下游"), true);
   check("确认页不估时长", /预计|大约|耗时|\d+\s*秒/.test(modalText), false);
-  await page.click("#pv-cancel");
+  await page.click('.modal [data-act="cancel"]');
   await page.waitForSelector(".modal", { state: "detached", timeout: 5000 });
   check("取消后弹层消失", await page.$$eval(".modal", (e) => e.length), 0);
   const runsAfter = (await (await fetch(`${base}/api/runs`)).json()) as unknown[];
@@ -590,8 +597,10 @@ try {
   await page.waitForSelector("[data-job='ui-j1'][data-job-act='rename']");
   const jobBefore = readFileSync(w("jobs", "ui-j1", "job.json"));
   const j2Before = readFileSync(w("jobs", "ui-j2", "job.json"));
-  page.once("dialog", (d) => d.accept("冒烟改名"));
   await page.click("[data-job='ui-j1'][data-job-act='rename']");
+  await page.waitForSelector(".modal #prompt-input");
+  await page.fill(".modal #prompt-input", "冒烟改名");
+  await page.click('.modal [data-act="ok"]');
   await page.waitForFunction(() => document.body.textContent?.includes("冒烟改名") === true);
   check("改名不改 job.json（避免把已跑的步标脏）", Buffer.compare(jobBefore, readFileSync(w("jobs", "ui-j1", "job.json"))), 0);
   check("显示名写在 card.json", JSON.parse(readFileSync(w("jobs", "ui-j1", "card.json"), "utf8")).title, "冒烟改名");
@@ -601,7 +610,7 @@ try {
   await page.waitForSelector("#archived [data-job='ui-j2'][data-job-act='restore']");
   check("归档后离开进行中列表", await page.locator("#jobs [data-job='ui-j2']").count(), 0);
   check("归档不改 job.json", Buffer.compare(j2Before, readFileSync(w("jobs", "ui-j2", "job.json"))), 0);
-  const todoOwners = await page.$$eval(".todo .chip", (els) => els.map((e) => e.getAttribute("title")));
+  const todoOwners = await page.$$eval(".todo .chip", (els) => els.map((e) => e.getAttribute("data-owner")));
   check("归档后待办不再提这个任务", todoOwners.includes("ui-j2"), false);
   check("归档后待办也不再提它的片段", todoOwners.includes("ui-c2"), false);
   await page.click("#archived [data-job='ui-j2'][data-job-act='restore']");
@@ -618,14 +627,256 @@ try {
   // 已经在 #/ 上，再 goto 同一个哈希不会重新拉总览。刷新才会看见刚建的任务。
   await page.reload();
   await page.waitForSelector(`[data-job='${made.id}'][data-job-act='delete']`);
-  page.once("dialog", (d) => d.accept());
   await page.click(`[data-job='${made.id}'][data-job-act='delete']`);
+  await page.waitForSelector('.modal [data-act="ok"]');
+  await page.click('.modal [data-act="ok"]');
   await page.waitForFunction((jobId) => !document.querySelector(`[data-job="${jobId}"]`), made.id);
   check("删除后任务目录没了", existsSync(w("jobs", made.id!)), false);
   check("删除时一起拿走它的片段", existsSync(w("clips", "ui-del")), false);
   check("删除不碰源视频", existsSync(fakeVideo), true);
   const sneaky = await fetch(`${base}/api/jobs/${encodeURIComponent("../x")}`, { method: "DELETE" });
   check("拒绝带着路径的任务 id", sneaky.status, 400);
+
+
+  // ============ J. 视觉与可访问性（规划 v2.8 判据） ============
+  console.log("[J] 密度 / 对比度 / 焦点 / 主题 / 断点 / 选择器 / 失败出口");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // 密度：总览页的任务卡才是 stepRow 的宿主（任务页把步骤收成了 chip 行）
+  await page.goto(`${base}/#/`);
+  await page.waitForSelector(".step");
+  check("正文 13px", await page.evaluate(() => getComputedStyle(document.body).fontSize), "13px");
+  check("步骤行 32px（b10 的 28–32）", await page.evaluate(() => getComputedStyle(document.querySelector(".step")!).height), "32px");
+  check("步骤行状态字 12px", await page.evaluate(() => getComputedStyle(document.querySelector(".step .state")!).fontSize), "12px");
+
+  await page.goto(`${base}/#/job/ui-j1`);
+  await page.waitForSelector("#job-sents .sent");
+  check("句流最小行高 32px", await page.evaluate(() => getComputedStyle(document.querySelector("#job-sents .sent")!).minHeight), "32px");
+  check(
+    "时间码 11px 等宽",
+    await page.evaluate(() => {
+      const st = getComputedStyle(document.querySelector(".sent .tc")!);
+      return `${st.fontSize} ${/mono/i.test(st.fontFamily) ? "mono" : "非等宽"}`;
+    }),
+    "11px mono",
+  );
+
+  const ratio = (fgSel: string, bgSel: string): Promise<number> =>
+    page.evaluate((sels: [string, string]) => {
+      const [f, b] = sels;
+      const lum = (c: string): number => {
+        const p = (c.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+        const l = p.map((v) => {
+          const x = v / 255;
+          return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * (l[0] ?? 0) + 0.7152 * (l[1] ?? 0) + 0.0722 * (l[2] ?? 0);
+      };
+      const a = lum(getComputedStyle(document.querySelector(f)!).color);
+      const c = lum(getComputedStyle(document.querySelector(b)!).backgroundColor);
+      return Math.round(((Math.max(a, c) + 0.05) / (Math.min(a, c) + 0.05)) * 100) / 100;
+    }, [fgSel, bgSel] as [string, string]);
+
+  const tcRatio = await ratio(".sent .tc", ".card.sents");
+  check(`时间码对卡片对比度 ≥4.5（实测 ${tcRatio}）`, tcRatio >= 4.5, true);
+  const hintRatio = await ratio(".hint", ".card");
+  check(`辅助文本对卡片对比度 ≥4.5（实测 ${hintRatio}）`, hintRatio >= 4.5, true);
+  const borderRatio = await page.evaluate(() => {
+    const lum = (c: string): number => {
+      const p = (c.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+      const l = p.map((v) => {
+        const x = v / 255;
+        return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+      });
+      return 0.2126 * (l[0] ?? 0) + 0.7152 * (l[1] ?? 0) + 0.0722 * (l[2] ?? 0);
+    };
+    const input = document.querySelector(".text")!;
+    const card = document.querySelector(".card")!;
+    const a = lum(getComputedStyle(input).borderTopColor);
+    const c = lum(getComputedStyle(card).backgroundColor);
+    return Math.round(((Math.max(a, c) + 0.05) / (Math.min(a, c) + 0.05)) * 100) / 100;
+  });
+  check(`控件边界对卡片对比度 ≥3（实测 ${borderRatio}）`, borderRatio >= 3, true);
+
+  // 当前句与已选区间必须是两种视觉，不能只靠 1.14 的色差
+  // 用克隆行比对：真实行上可能已经带着 .cur（播放头落在这一句），直接加类会把两种状态叠在一起
+  const twoMarks = await page.evaluate(() => {
+    const host = document.querySelector("#job-sents")!;
+    const src = document.querySelector("#job-sents .sent")!;
+    const mk = (cls: string): HTMLElement => {
+      const el = src.cloneNode(true) as HTMLElement;
+      el.className = `sent ${cls}`;
+      host.appendChild(el);
+      return el;
+    };
+    const bg = (el: HTMLElement) => getComputedStyle(el).backgroundColor;
+    const a = mk("in-sel");
+    const b = mk("cur");
+    const out = { same: bg(a) === bg(b), hasBar: /inset/.test(getComputedStyle(b).boxShadow), sel: bg(a), cur: bg(b) };
+    a.remove();
+    b.remove();
+    return out;
+  });
+  check(`已选（${twoMarks.sel}）与当前句（${twoMarks.cur}）不是同一个底色`, twoMarks.same, false);
+  check("当前句带左侧 2px 条（不单靠底色）", twoMarks.hasBar, true);
+
+  // 键盘焦点可见
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("Tab");
+  const focusRing = await page.evaluate(() => {
+    const el = document.activeElement as HTMLElement;
+    const st = getComputedStyle(el);
+    return { w: st.outlineWidth, s: st.outlineStyle, tag: el.tagName };
+  });
+  check("Tab 后焦点环可见（2px 实线）", focusRing.w === "2px" && focusRing.s === "solid", true);
+
+  // 播放器底色：明暗都应是近黑（审片时周围不能发光）
+  const mediaLum = (): Promise<number> =>
+    page.evaluate(() => {
+      const c = getComputedStyle(document.querySelector(".player")!).backgroundColor;
+      const p = (c.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+      const l = p.map((v) => {
+        const x = v / 255;
+        return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+      });
+      return Math.round((0.2126 * (l[0] ?? 0) + 0.7152 * (l[1] ?? 0) + 0.0722 * (l[2] ?? 0)) * 1000) / 1000;
+    });
+  const lightLum = await mediaLum();
+  check(`浅色下播放器底亮度 <5%（实测 ${lightLum}）`, lightLum < 0.05, true);
+  await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
+  const darkLum = await mediaLum();
+  check(`暗色下播放器底亮度 <5%（实测 ${darkLum}）`, darkLum < 0.05, true);
+  check("明暗两态播放器底一致", darkLum, lightLum);
+  await page.evaluate(() => document.documentElement.removeAttribute("data-theme"));
+
+  // 主题三态：点一次切浅、再点切深，刷新后保持
+  await page.click("#btn-theme");
+  check("点主题键切到浅色", await page.evaluate(() => document.documentElement.dataset.theme), "light");
+  await page.click("#btn-theme");
+  check("再点切到深色", await page.evaluate(() => document.documentElement.dataset.theme), "dark");
+  await page.reload();
+  await page.waitForSelector("#btn-theme");
+  check("刷新后主题保持（存的是选择，不是解析结果）", await page.evaluate(() => document.documentElement.dataset.theme), "dark");
+  check("暗色下 color-scheme=dark（原生控件跟着变暗）", (await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).includes("dark"), true);
+  await page.evaluate(() => localStorage.removeItem("ss-theme"));
+  await page.reload();
+  await page.waitForSelector("#btn-theme");
+
+  // 待办条：是链接、能直达、并且 sticky
+  await page.goto(`${base}/#/`);
+  await page.waitForSelector(".todo");
+  check("待办 chip 是链接（不是只回答、去不了）", await page.evaluate(() => document.querySelector(".todo .chip")?.tagName), "A");
+  check("待办 chip 指向具体步骤", await page.evaluate(() => /^#\/(job|clip)\//.test(document.querySelector(".todo a.chip")?.getAttribute("href") ?? "")), true);
+  check("待办条 sticky", await page.evaluate(() => getComputedStyle(document.querySelector(".todo")!).position), "sticky");
+
+  // 800×600 不横向溢出（此前零断点，时间码会顶出去）
+  await page.setViewportSize({ width: 800, height: 600 });
+  await page.goto(`${base}/#/job/ui-j1`);
+  await page.waitForSelector("#job-sents .sent");
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  check("800 宽无横向溢出", overflow <= 0, true);
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  // 同一 clip 在任务页只出现一次（此前「人工定稿」与「片段」各列一遍）
+  await page.goto(`${base}/#/job/ui-j1`);
+  await page.waitForSelector(".clip-row");
+  check("同一 clip_id 在任务页只出现一次", await page.locator('a[href="#/clip/ui-c1"]').count(), 1);
+
+  // 选择文件：真实列目录、Esc 关闭、焦点归还
+  await page.goto(`${base}/#/`);
+  await page.waitForSelector("#nj-pick");
+  await page.click("#nj-pick");
+  await page.waitForSelector(".picker .picker-row", { timeout: 10000 });
+  check("选择器列出盘符/主目录（服务端列目录可用）", (await page.locator(".picker .picker-row").count()) > 0, true);
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".picker", { state: "detached" });
+  check("Esc 关闭后焦点回到触发按钮", await page.evaluate(() => document.activeElement?.id), "nj-pick");
+
+  // s04 面板进卡片容器（此前唯一一个掉出容器的面板）
+  await page.goto(`${base}/#/clip/ui-c1/s04`);
+  await page.waitForSelector("#panel-s04 .ws-head");
+  check("s04 的 ws-head 在 .card 里", await page.evaluate(() => !!document.querySelector("#panel-s04 .ws-head")?.closest(".card")), true);
+  check("tab 高 28px（b10 的 28–32 下限）", await page.evaluate(() => getComputedStyle(document.querySelector(".tabs .tab")!).height), "28px");
+
+  // ============ K. 入口校验 / 任务页审片 / 句行键盘模型 / 导航中文优先 ============
+  // 这四条都是「取舍对、但只在片段页兑现」的地方：b9 的联动此前只做了片段页一半，
+  // b1 的入口此前只能手填路径。夹具视频是真的 6 秒 mp4，所以播放头位移可以实打实测。
+  console.log("[K] 入口校验 / 任务页审片 / 句行键盘模型 / 导航中文优先");
+
+  await page.goto(`${base}/#/`);
+  await page.waitForSelector("#nj-video");
+  let jobPosts = 0;
+  page.on("request", (r) => {
+    if (r.method() === "POST" && /\/api\/jobs$/.test(new URL(r.url()).pathname)) jobPosts++;
+  });
+  await page.fill("#nj-video", path.join(ROOT, "根本没有这个文件.mp4"));
+  await page.locator("#nj-video").blur();
+  await page.waitForFunction(() => /不在这里/.test(document.getElementById("nj-msg")?.textContent ?? ""), null, { timeout: 10000 });
+  check("路径填错时当场报「文件不在这里」（不等提交）", /不在这里/.test((await page.textContent("#nj-msg")) ?? ""), true);
+  await page.click("#nj-go");
+  await page.waitForTimeout(300);
+  check("非法路径没有发出建任务请求（0 次 POST）", jobPosts, 0);
+  page.removeAllListeners("request");
+
+  await page.goto(`${base}/#/job/ui-j1`);
+  await page.waitForSelector("#job-player");
+  check("任务页有播放器（不再只看 11px 时间码盲选）", await page.evaluate(() => !!document.querySelector("#job-player")), true);
+  const seek = await page.evaluate(async () => {
+    const v = document.querySelector("#job-player") as HTMLVideoElement;
+    const rows = document.querySelectorAll<HTMLElement>("#job-sents .sent");
+    rows[2]!.click(); // 第三句 start=2.5
+    // 点完就开始播，播放头会往前走：先记「在播」，再暂停读数，否则测到的是 2.5 + 等待时长
+    await new Promise((r) => setTimeout(r, 150));
+    const playing = !v.paused;
+    v.pause();
+    return {
+      playing,
+      t: Math.round(v.currentTime * 100) / 100,
+      cur: document.querySelectorAll("#job-sents .sent.cur").length,
+    };
+  });
+  check(`点第三句后播放头落到 2.5s（实测 ${seek.t}）`, Math.abs(seek.t - 2.5) < 0.5, true);
+  check("点句后开始播放", seek.playing, true);
+  check("播放时高亮当前句（只有一个 .cur）", seek.cur, 1);
+
+  const keyModel = await page.evaluate(() => {
+    const rows = Array.from(document.querySelectorAll<HTMLElement>("#job-sents .sent"));
+    return {
+      role: rows[0]?.getAttribute("role"),
+      stops: rows.filter((r) => r.getAttribute("tabindex") === "0").length,
+      total: rows.length,
+    };
+  });
+  check("句行是 listbox 选项（role=option）", keyModel.role, "option");
+  check("整列只有一个 tab stop（roving tabindex）", keyModel.stops, 1);
+  check("四句都在", keyModel.total, 4);
+
+  // 键盘：↓ 移动焦点，[ ] 设起止 —— 目标是不碰鼠标也能选区
+  await page.focus("#job-sents .sent[tabindex='0']");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("[");
+  await page.keyboard.press("]");
+  await page.waitForFunction(() => /已选/.test(document.getElementById("sel-info")?.textContent ?? ""), null, { timeout: 5000 });
+  check("键盘 [ / ] 能设出区间（不依赖鼠标拖选）", /已选/.test((await page.textContent("#sel-info")) ?? ""), true);
+
+  await page.goto(`${base}/#/clip/ui-c1/s03`);
+  await page.waitForSelector(".tabs .tab");
+  const tabText = (await page.textContent(".tabs .tab"))?.trim() ?? "";
+  check(`tab 首词是中文，不是裸 s03（实测「${tabText.slice(0, 6)}」）`, /^[\u4e00-\u9fa5]/.test(tabText), true);
+  check("tab 编号降级为 sNN 后缀", /^s\d\d$/.test((await page.textContent(".tabs .tab .tab-id"))?.trim() ?? ""), true);
+
+  // 失败出口：/api/run 直接 500 时，状态行报失败并恢复按钮（此前会僵在「启动中…」）
+  await page.goto(`${base}/#/job/ui-j1`);
+  await page.waitForSelector("#run-s00");
+  await page.route("**/api/run", (route) => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "冒烟注入失败" }) }));
+  await page.click("#run-s00");
+  await page.waitForSelector('.modal [data-act="ok"]');
+  await page.click('.modal [data-act="ok"]');
+  await page.waitForFunction(() => (document.querySelector("#run-status")?.textContent ?? "").includes("失败"), null, { timeout: 10000 });
+  check("启动失败时状态行报失败", (await page.$eval("#run-status", (e) => e.textContent ?? "")).includes("冒烟注入失败"), true);
+  check("失败后按钮恢复可点（不是永久 busy）", await page.$eval("#run-s00", (b) => (b as HTMLButtonElement).disabled === false), true);
+  await page.unroute("**/api/run");
+
+  check("全程没有出现原生 alert/confirm/prompt", nativeDialogs, 0);
 
   // ---- 截图：布局塌陷、圆点隐形这类问题只有看图才发现 ----
   await page.goto(`${base}/#/`);

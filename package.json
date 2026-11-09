@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node src/server/main.ts",
     "build": "vite build",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "verify:tokens": "node tools/verify-tokens.ts",
+    "verify:ui": "node tools/verify-ui.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

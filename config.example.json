@@ -1,7 +1,14 @@
 {
   "llm": {
-    "base_url": "https://api.example.com/v1",
-    "api_key": "",
-    "model": "your-model-name"
+    "profiles": [
+      {
+        "id": "p1",
+        "name": "示例",
+        "base_url": "https://api.example.com/v1",
+        "api_key": "",
+        "model": "your-model-name"
+      }
+    ],
+    "default_id": "p1"
   }
 }

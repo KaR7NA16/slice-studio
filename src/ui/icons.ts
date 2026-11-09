@@ -15,6 +15,16 @@ const PATHS: Record<string, string> = {
   plus: "M12 5v14M5 12h14",
   back: "M15 5l-7 7 7 7",
   spark: "M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4L12 3z",
+  sliders: "M6 4v6M6 14v6M3.5 12h5M12 4v2M12 10v10M9.5 8h5M18 4v10M18 18v2M15.5 16h5",
+  down: "M12 4.5v13M6.5 12l5.5 5.5 5.5-5.5",
+  // 分叉树（b7）：一个主干节点分出一条侧枝
+  branch: "M7 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM7 22a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM7 6v12M7 12h6a4 4 0 0 0 4-4V8M17 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
+  // 自动档（b3/b4）
+  bolt: "M13 3L5 14h6l-1 7 8-11h-6l1-7z",
+  // 波形（s03 气口）
+  wave: "M3 12h1.5l2-6 2 13 2-16 2 19 2-13 2 6 1.5-3H21",
+  save: "M12 4v10M7 9.5l5 5 5-5M5 20h14",
+  x: "M6 6l12 12M18 6L6 18",
 };
 
 export function icon(name: keyof typeof PATHS, size = 13): string {

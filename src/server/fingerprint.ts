@@ -3,6 +3,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
+import path from "node:path";
 
 const FULL_HASH_LIMIT = 8 * 1024 * 1024;
 
@@ -14,6 +15,12 @@ async function sha256File(file: string): Promise<string> {
       .on("end", () => resolve("sha256:" + h.digest("hex")))
       .on("error", reject);
   });
+}
+
+// 登记路径有两种：相对 work/ 的产物，或工作区外面的源视频（绝对路径）。
+// 绝对路径不能再拼到 work/ 上，否则指纹对的是一个不存在的文件，步会永远 stale。
+export function resolveInputPath(workRoot: string, stored: string): string {
+  return path.isAbsolute(stored) ? stored : path.join(workRoot, stored);
 }
 
 // 文件不存在返回 null（调用方据此判 empty/error，不猜）

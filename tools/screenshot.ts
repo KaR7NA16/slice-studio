@@ -7,13 +7,14 @@
 //   ③ %USERPROFILE%\AppData\Local\ms-playwright\chromium_headless_shell-*\（按前缀扫，不写死 -1234）
 // 为什么不随包内置那 271MB：它是开发期核验工具，不进运行链路——六步流水线与服务启动都不需要它。
 // 原实现把 os.homedir() + 版本号写死，playwright 一升级或换机器即失效（且会被反复误认成「C 盘残留」）。
+import { SCRATCH } from "./scratchdir.ts";
 import { chromium } from "playwright-core";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
 const url = process.argv[2] ?? "http://127.0.0.1:51987";
-const out = process.argv[3] ?? path.join(os.tmpdir(), "slice-stage1.png");
+const out = process.argv[3] ?? path.join(SCRATCH, "slice-stage1.png");
 
 const SHELL_REL = path.join("chrome-headless-shell-win64", "chrome-headless-shell.exe");
 

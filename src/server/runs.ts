@@ -1,12 +1,26 @@
 // run 触发与心跳（b53）：一步一子进程，记录落 data/runs/<id>.json。
 // 心跳 = updated_at（子进程每次进展都刷新）；失联判定在读侧现算（b43：盘上是事实，状态是派生）。
 import { spawn } from "node:child_process";
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { STEP_BY_ID, stepsFor } from "../shared/steps.ts";
 import type { RunRecord } from "../shared/types.ts";
+import { effective } from "./automation.ts";
 import { readJson, writeJsonAtomic } from "./jsonfile.ts";
+import { acquire, resourceOf } from "./slots.ts";
+import { survey } from "./survey.ts";
 
 const LOST_AFTER_MS = 30_000; // 30 秒无心跳判失联
+
+// 同一步已经在跑时再起一个，两个子进程会写同一对产物。HTTP 与自动链都走 startRun，锁放在这里。
+export class RunBusyError extends Error {
+  constructor(step: string) {
+    super(`${step} 已在运行`);
+    this.name = "RunBusyError";
+  }
+}
+
+const inflight = new Set<string>();
 // 代码目录 ≠ 数据根：root 是用户数据根，步执行体在本仓库里（按本文件位置推导）
 const CODE_ROOT = path.resolve(import.meta.dirname, "..", "..");
 
@@ -21,8 +35,72 @@ function derive(rec: RunRecord): RunRecord {
   return rec;
 }
 
+// 自动链（b3/b4 的兑现处）：一步跑完，看它的**直接下游**里有没有「档位 = auto 且输入齐备」的，有就接着跑。
+// 三个刻意的约束：
+// ① **一次只起一个**——不在这里递归起一串子进程。下一个跑完会再走一遍这里，链条自然往下推；
+//    递归起链会让「哪一步失败」与「谁起的它」在运行记录里对不上。
+// ② **严格门：强依赖的契约产物必须齐备**。auto 不该去跑一个输入还没准备好的步——
+//    那只会得到一个 error，还把「是你没跑上游」伪装成「这步坏了」。
+//    代价是：只把 s05 设成 auto 而没跑 s02 时它不会自动跑（依赖没齐）。这是刻意的保守，不是漏。
+// ③ **已经 ready 的不重跑**。档位管的是「上游好了就往下走」，不是「每次都重算」。
+async function artifactsPresent(root: string, owner: string, step: string): Promise<boolean> {
+  const spec = STEP_BY_ID.get(step);
+  if (!spec) return false;
+  for (const name of spec.artifacts) {
+    const ok = await stat(path.join(root, "work", owner, step, name)).then((s) => s.isFile()).catch(() => false);
+    if (!ok) return false;
+  }
+  return true;
+}
+
+async function hasRunning(root: string, owner: string, step: string): Promise<boolean> {
+  return (await listRuns(root)).some((r) => r.owner === owner && r.step === step && r.status === "running");
+}
+
+export async function autoChain(root: string, owner: string, justFinished: string): Promise<void> {
+  const level = owner.startsWith("jobs/") ? "job" : "clip";
+  const [eff, sv] = await Promise.all([effective(root, owner), survey(root)]);
+  const ownerId = owner.slice(owner.indexOf("/") + 1);
+  const steps = level === "job"
+    ? sv.jobs.find((j) => j.id === ownerId)?.steps
+    : sv.clips.find((c) => c.id === ownerId)?.steps;
+  if (!steps) return;
+  for (const s of stepsFor(level)) {
+    if (!s.deps.includes(justFinished)) continue; // 只看直接下游
+    if (eff[s.id] !== "auto") continue;
+    if (steps.find((x) => x.step === s.id)?.status === "ready") continue;
+    if (await hasRunning(root, owner, s.id)) continue;
+    let ready = true;
+    for (const d of s.deps) {
+      if (!(await artifactsPresent(root, owner, d))) {
+        ready = false;
+        break;
+      }
+    }
+    if (!ready) continue;
+    await startRun(root, owner, s.id, null);
+    return;
+  }
+}
+
 export async function startRun(root: string, owner: string, step: string, mode: string | null): Promise<RunRecord> {
-  await mkdir(runsDir(root), { recursive: true });
+  // 先占坑再 await。两个请求若都先查磁盘再落盘，会同时看见「没有在跑」然后各起一份。
+  const key = `${root}\0${owner}\0${step}`;
+  if (inflight.has(key)) throw new RunBusyError(step);
+  inflight.add(key);
+  let releaseSlot: (() => void) | null = null;
+  let freed = false;
+  const release = (): void => {
+    if (freed) return;
+    freed = true;
+    inflight.delete(key);
+    releaseSlot?.();
+  };
+  try {
+    if (await hasRunning(root, owner, step)) throw new RunBusyError(step);
+    // 槽满就在这里等。返回时子进程已经占着槽，调用方看到的 running 不是还在排队。
+    releaseSlot = await acquire(await resourceOf(root, owner, step, mode));
+    await mkdir(runsDir(root), { recursive: true });
   const now = new Date().toISOString();
   const rec: RunRecord = {
     id: `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
@@ -37,29 +115,68 @@ export async function startRun(root: string, owner: string, step: string, mode: 
     error: null,
   };
   await writeJsonAtomic(runFile(root, rec.id), rec);
+  // 步执行体的 stdout/stderr **必须留痕**。原先是 `stdio: "ignore"`，代价是：
+  // 子进程硬崩时 run 记录里只有「进程异常退出（code 1）」，一条线索都没有——
+  // 2026-09-18 端到端验收撞上 s02 崩溃，就因为这个盲区，只能靠手工绕过服务重跑才定位。
+  // 现在保留末尾 8KB，落 data/runs/<id>.log（有输出才落，空输出不产生文件）。
   const child = spawn(
     process.execPath,
     [path.join(CODE_ROOT, "src", "steps", "run.ts"), root, owner, step, mode ?? "", rec.id],
-    { stdio: "ignore" },
+    { stdio: ["ignore", "pipe", "pipe"] },
   );
-  // 进程级失败兜底：步代码自己会写 error；只有「根本没跑起来/崩了」才由这里据实补记
+  let tail = "";
+  const collect = (b: Buffer): void => {
+    tail = (tail + b.toString()).slice(-8192);
+  };
+  child.stdout?.on("data", collect);
+  child.stderr?.on("data", collect);
+  // 进程级失败兜底：步代码自己会写 error；只有「根本没跑起来/崩了」才由这里据实补记。
+  // 跑成了才推自动链。失败不推——上游没产出，下游的严格门本来也会拦住，
+  // 而且「失败后还自动往下跑」会让人以为链条是通的。
+    child.on("error", release);
   child.on("exit", (code) => {
+    release();
     void (async () => {
+      // 有输出才落日志：空输出不产生空文件（多数步是静默的）
+      let hint = "";
+      if (tail.trim()) {
+        const logPath = path.join(runsDir(root), rec.id + ".log");
+        await writeFile(logPath, tail, "utf8").catch(() => {
+          console.error(`[run] 无法写运行日志：${logPath}`);
+        });
+        const inline = tail.trim().split("\n").slice(-3).join(" / ").slice(-300);
+        hint = `；末尾输出：${inline}（详见 data/runs/${rec.id}.log）`;
+      }
       const cur = await readJson<RunRecord>(runFile(root, rec.id));
-      if (cur && cur.status === "running") {
+      if (!cur) return;
+      if (cur.status === "running") {
+        const msg = `进程异常退出（code ${String(code)}）${hint}`;
         await writeJsonAtomic(runFile(root, rec.id), {
           ...cur,
           status: "error",
-          error: `进程异常退出（code ${String(code)}）`,
-          message: `进程异常退出（code ${String(code)}）`,
+          error: msg,
+          message: msg,
           updated_at: new Date().toISOString(),
           finished_at: new Date().toISOString(),
         });
+        return;
+      }
+      if (cur.status === "done") {
+        try {
+          await autoChain(root, owner, step);
+        } catch (e) {
+          // 不静默：自动链坏了必须留痕；但**不得**改写本次 run 已落盘的成功事实（善后不推翻主操作）
+          console.error(`[autoChain] ${owner} ${step} 之后的自动链失败：${e instanceof Error ? e.message : String(e)}`);
+        }
       }
     })();
   });
-  child.unref();
-  return rec;
+    child.unref();
+    return rec;
+  } catch (e) {
+    release();
+    throw e;
+  }
 }
 
 export async function getRun(root: string, id: string): Promise<RunRecord | null> {

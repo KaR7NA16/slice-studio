@@ -5,7 +5,7 @@ import type { AiDraftFile, ClipFile, SentencesFile } from "../shared/types.ts";
 import { llmStatus } from "../server/config.ts";
 import { readJson, writeJsonAtomic } from "../server/jsonfile.ts";
 import { chatJson } from "./llm.ts";
-import { finishStep, inputRef, progress, stepDir, workDir } from "./lib.ts";
+import { commitVariant, finishStep, inputRef, progress, stepDir, workDir } from "./lib.ts";
 
 const SYSTEM = `你是短视频剪辑助手。输入是一个片段的逐句字幕（id、起止秒、文本）。
 判断哪些句子该删，让成片紧凑：废话、重复、跑题、口头语堆砌可删；拿不准的一律保留。
@@ -54,7 +54,12 @@ export async function draftS03(root: string, owner: string, runId: string): Prom
     throw new Error(`LLM 返回不是合法 JSON：${reply.slice(0, 120)}`);
   }
   const ai: AiDraftFile = { schema: 1, model: llm.llm.model, at: new Date().toISOString(), decisions: deletions };
-  await writeJsonAtomic(path.join(dir, "ai.json"), ai);
-  await finishStep(root, owner, "s03", [await inputRef(root, "sentences.json", `${owner}/s03/sentences.json`)], ["ai.json"]);
-  return `AI 建议删 ${deletions.length} 句`;
+  // 抽卡：本次初稿另存一版 variants/<id>.json，并把主干指到它（b26/b7/b8）。
+  // 人工改判在覆盖层里，切主干不碰它——所以「重抽一版」不会丢任何人工判断（b29/b46）。
+  const label = deletions.length === 0 ? "AI 建议不删" : `AI 建议删 ${deletions.length} 句`;
+  await commitVariant(root, owner, "s03", { model: llm.llm.model, label }, ai, {
+    inputs: [await inputRef(root, "sentences.json", `${owner}/s03/sentences.json`)],
+    outputs: ["ai.json"],
+  });
+  return `${label}（已存档为一版，可切回）`;
 }

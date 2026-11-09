@@ -14,6 +14,11 @@ tools/ffmpeg/
 tools/node/
 tools/python/
 
+# 随包预置的模型权重（80.2MB，分发时打进绿色目录，不入库）
+# 内容：models/demucs/{htdemucs.yaml, 955717e8-8726e21a.th}
+# 加载方式：Separator(model="htdemucs", repo=<数据根>/models/demucs) → LocalRepo，零网络
+models/
+
 # 本机密钥配置（模板 config.example.json 入库）
 config.json
 
@@ -23,6 +28,16 @@ config.json
 # 其他
 *.log
 .DS_Store
+
+# 启动器编译产物（源码在 launcher/Launcher.cs，双击前由 csc 编到目录根）
+/slice-studio.exe
+
+# Python 运行缓存
+__pycache__/
+*.pyc
+
+# agent 会话记忆（每会话重写，含本机绝对路径，不随仓库分发）
+.workbuddy/
 
 # 文档留在本机，不进远端
 docs/

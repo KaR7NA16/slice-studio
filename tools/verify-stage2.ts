@@ -7,7 +7,7 @@
 import { SCRATCH } from "./scratchdir.ts";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -43,7 +43,10 @@ import type {
 } from "../src/shared/types.ts";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
-const VROOT = path.join(SCRATCH, "slice-verify2");
+// 每次运行用唯一素材根：clip id 由 job/start/end/title 哈希稳定复现，固定名根上残留的
+// s04 run 会被 /api/runs 重新读到，把「档位=人工时不自动跑」读成假红（2026-11-09 实测）。
+// 唯一根让「先清旧根」不再必要，也就绕开了删除守卫的 turn 级配额。
+const VROOT = await mkdtemp(path.join(SCRATCH, "slice-verify2-"));
 const FFMPEG = path.join(ROOT, "tools", "ffmpeg", "ffmpeg.exe");
 const FFPROBE = path.join(ROOT, "tools", "ffmpeg", "ffprobe.exe");
 const execFileP = promisify(execFile);
@@ -152,11 +155,8 @@ const stepState = (s: Survey, ownerKind: "jobs" | "clips", id: string, step: str
   s[ownerKind].find((o) => o.id === id)?.steps.find((st) => st.step === step)?.status ?? "missing";
 
 async function main(): Promise<void> {
-  // 清空临时素材根。失败降级为警告：本脚本的 job/clip id 是随机的，残留的旧夹具不会被
-  // 任何断言命中，所以「没清掉」不该让整个脚本崩（沙箱删除配额耗尽时就是这种情况）。
-  await rm(VROOT, { recursive: true, force: true }).catch(() => {
-    console.log("⚠️ 无法清空临时素材根（删除被环境拦截）——旧夹具会留在盘上，但不影响本次断言");
-  });
+  // VROOT 是本次 mkdtemp 新建的唯一目录，天然干净：不再需要「先清旧根」，
+  // 也不再有删除守卫耗尽配额导致旧夹具残留、污染断言的可能。
   await mkdir(path.join(VROOT, "work"), { recursive: true });
   // 产品在「从没写过 llm」时会自动用免密钥接口。这套回归要守的是「显式清空 = 未配置」，
   // 所以验收根先写一份空的 llm，别让免密钥把「未配置」的断言跑成真请求。
@@ -1322,8 +1322,13 @@ async function main(): Promise<void> {
 
     // N2. 自动链的**反面**：档位=人工时，上游跑完不该自动往下跑。
     // 这条不能省——只测「auto 会跑」的话，一个「永远自动跑」的错误实现也会通过（铁律 12）。
+    // 双保险：只统计本次新增的 run。即使将来把 VROOT 改回固定名根，
+    // 旧夹具里的 s04 记录也不会把 N2 反面 / N3 正面读成假红或假绿。
+    const s04Baseline = new Set(
+      (await api<RunRecord[]>("/api/runs")).filter((r) => r.owner === c2owner && r.step === "s04").map((r) => r.id),
+    );
     const s04Runs = async (): Promise<RunRecord[]> =>
-      (await api<RunRecord[]>("/api/runs")).filter((r) => r.owner === c2owner && r.step === "s04");
+      (await api<RunRecord[]>("/api/runs")).filter((r) => r.owner === c2owner && r.step === "s04" && !s04Baseline.has(r.id));
     await runAndWait(c2owner, "s03", null);
     await new Promise((r) => setTimeout(r, 4000)); // 给「万一真自动跑了」足够的时间露头
     check("档位=人工时不自动跑 s04（反面）", (await s04Runs()).length === 0, String((await s04Runs()).length));

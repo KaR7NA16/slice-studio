@@ -2,7 +2,8 @@
 // 覆盖：empty → ready → stale（输入变 / 输入丢失）→ missing（契约产物缺失，P1-4）→ suspect（递归传播）
 //       → 恢复后自动回 ready（b27 只标脏）→ error 事实 → lazy.available 与契约判据同源
 // 运行：node tools/verify-stage1.ts（在 slice-studio 根目录下）；结束清理 work/_verify*
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { survey } from "../src/server/survey.ts";
 import { fingerprint } from "../src/server/fingerprint.ts";
@@ -65,14 +66,12 @@ async function statusOf(owner: "jobs" | "clips", id: string): Promise<Record<str
   return Object.fromEntries(found.steps.map((st) => [st.step, st.status]));
 }
 
-// 用旧项目真实素材视频做 job 输入（不造内容，只引用）
-const MATERIALS = "<old-repo>/assets/materials";
-const video = (await readdir(MATERIALS)).find((f) => f.endsWith(".mp4"));
-if (!video) throw new Error("materials 里没有 mp4");
+// 夹具视频在下面「清空旧夹具」之后生成，否则会被开头清理一起删掉（见 FIXTURE_DIRS）。
+// 旧项目「切片助手」只读参考目录里的素材已不存在，不能再硬编码那个绝对路径。
 
 // 夹具目录清单（第 131 行的 p14Rel 也在其中）。开头清空、finally 清理都按这份清单走。
 // _verify_graveyard 是「坟场」：用例需要「让产物不存在」时把文件 rename 进去，而不是 rm（见 bury）。
-const FIXTURE_DIRS = ["jobs/_verify", "clips/_verify_c1", "clips/_verify_p14", "clips/_verify_abs", "_verify_graveyard"];
+const FIXTURE_DIRS = ["jobs/_verify", "clips/_verify_c1", "clips/_verify_p14", "clips/_verify_abs", "_verify_graveyard", "_verify_input.mp4"];
 
 // 「让产物不存在」用 rename 而非 rm。两个理由：
 // ① 用例语义是「文件不在原路径」，不是「文件被销毁」——rename 完全等价，且失败时文件还在坟场可诊断；
@@ -100,11 +99,30 @@ for (const rel of FIXTURE_DIRS) {
   }
 }
 
+// job 的 video_path 必须指向真实存在的文件（survey 对缺失输入会标 stale）。
+// 随包 ffmpeg 现场生成一段最小真实视频：自包含、不依赖另一次验证的产物；
+// 同一进程内只生成一次并复用，输入指纹不会在用例之间漂移（b27 需要它稳定）。
+const video = path.join(WORK, "_verify_input.mp4");
+const ffmpeg = path.join(ROOT, "tools", "ffmpeg", "ffmpeg.exe");
+const enc = spawnSync(
+  ffmpeg,
+  [
+    "-y", "-hide_banner", "-loglevel", "error",
+    "-f", "lavfi", "-i", "color=c=black:s=160x120:r=25:d=3",
+    "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
+    "-shortest", "-t", "3",
+    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+    video,
+  ],
+  { stdio: "pipe" },
+);
+if (enc.status !== 0) throw new Error(`ffmpeg 没生成夹具视频：${String(enc.stderr ?? enc.error)}`);
+
 const jobRel = "jobs/_verify";
 await mkdir(path.join(WORK, jobRel), { recursive: true });
 const jobPath = path.join(WORK, jobRel, "job.json");
 const jobJson = JSON.stringify(
-  { schema: 1, id: "_verify", video_path: `${MATERIALS}/${video}`, srt_path: null, created_at: new Date().toISOString() },
+  { schema: 1, id: "_verify", video_path: video, srt_path: null, created_at: new Date().toISOString() },
   null,
   2,
 );

@@ -14,7 +14,7 @@
 
 import { SCRATCH } from "./scratchdir.ts";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { chromium, type Browser } from "playwright-core";
 import { CUT_GAP, filmRanges, filmSeconds, previewJump } from "../src/shared/cut.ts";
@@ -57,9 +57,10 @@ check(
 check("预览与出片共用 0.5 秒间隔", CUT_GAP, 0.5);
 
 // ---- 数据根：临时目录 + 预置两个 owner，覆盖 missing 的两种可见位置 ----
-const ROOT = path.join(SCRATCH, "slice-ui-smoke");
-rmSync(ROOT, { recursive: true, force: true });
-mkdirSync(ROOT, { recursive: true });
+// 每次运行用唯一目录：clip/job id 由输入内容哈希稳定复现，固定名根上残留的旧夹具会被
+// /api/clips 重新命中，把「本次没有 run」读成上次的结果（2026-11-09 实测同款污染）。
+// mkdtempSync 直接建好目录，不必先 rm；清理失败只影响磁盘占用，不污染下一次运行。
+const ROOT = mkdtempSync(path.join(SCRATCH, "slice-ui-smoke-"));
 
 const now = new Date().toISOString();
 const w = (...p: string[]): string => path.join(ROOT, "work", ...p);
@@ -67,6 +68,9 @@ const put = (file: string, data: unknown): void => {
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, typeof data === "string" ? data : JSON.stringify(data, null, 2));
 };
+// 显式关掉调试用的免密钥默认档：不写 llm 键时 config.ts 会回落到外部免费接口，
+// 设置页「未配置」的前提就不成立（[C] 段会一直等到超时）。与 verify-stage2.ts 同款夹具隔离。
+put(path.join(ROOT, "config.json"), { llm: { profiles: [], default_id: null } });
 
 // job 的 video_path 必须**真实存在**：媒体出口对缺失文件会抛 500（已登记进缺口清单，
 // 不属本次改动范围）。夹具不制造这个噪音，「无预期错误」那条断言才有判别力。
@@ -213,10 +217,14 @@ const shellDir = readdirSync(pwBase).filter((n) => n.startsWith("chromium_headle
 if (!shellDir) throw new Error(`没找到 chromium_headless_shell-*（${pwBase}）`);
 const exe = path.join(pwBase, shellDir, "chrome-headless-shell-win64", "chrome-headless-shell.exe");
 
-const MISSING_RGB = "rgb(255, 45, 85)"; // --st-missing: #ff2d55
+// 期望色不再写死：--st-missing 指向 --text-danger，令牌换值时断言必须跟着走。
+// 开页后由 DOM 探针读 --text-danger 的计算色（独立于被测的 .dot.missing 规则，避免自己验自己）。
+let MISSING_RGB = "";
 const KEY = "sk-ui-smoke-1234567890";
 const errs: string[] = [];
 let browser: Browser | null = null;
+let fatal: unknown = null;
+let cleanupWarn = "";
 try {
   browser = await chromium.launch({ executablePath: exe });
   const page = await browser.newPage();
@@ -237,6 +245,15 @@ try {
   console.log("[A] P1-4：missing 态渲染（步骤行圆点 / 状态文案 / 待办条）");
   await page.goto(`${base}/#/`);
   await page.waitForSelector(".step");
+  MISSING_RGB = await page.evaluate(() => {
+    const probe = document.createElement("span");
+    probe.style.color = "var(--text-danger)";
+    document.body.appendChild(probe);
+    const c = getComputedStyle(probe).color;
+    probe.remove();
+    return c;
+  });
+  console.log(`  missing 期望色（读 --text-danger）：${MISSING_RGB}`);
   // 按卡片归属取行：现在有两个 job，直接 `$$eval(".step")` 会把两者的 s00 混在一起，
   // `find` 取到的是排在前面的 ui-j1（ready）——断言会红得莫名其妙。
   const rows = await page.$$eval(".card", (cards) =>
@@ -616,12 +633,31 @@ try {
   const shot = path.join(process.env.TEMP ?? "/tmp", "slice-ui-smoke-shot.png");
   await page.screenshot({ path: shot, fullPage: true });
   console.log(`\n截图：${shot}`);
+} catch (e) {
+  // 必须留住原始异常：以前 finally 里裸 rmSync 撞上删除守卫会抛第二个异常把它覆盖，
+  // 真实失败原因（例如 waitForFunction 超时）就永远看不到了。
+  fatal = e;
+  console.error("\n验证中断（原始异常）：", e);
 } finally {
-  await browser?.close();
-  srv.kill();
+  try {
+    await browser?.close();
+  } catch (e) {
+    cleanupWarn += `关闭浏览器失败：${String(e)}；`;
+  }
+  try {
+    srv.kill();
+  } catch (e) {
+    cleanupWarn += `关闭服务失败：${String(e)}；`;
+  }
   await new Promise((r) => setTimeout(r, 300));
-  rmSync(ROOT, { recursive: true, force: true });
+  try {
+    rmSync(ROOT, { recursive: true, force: true });
+  } catch (e) {
+    // 删除守卫（turn 级配额）拦下时不能抛：否则原始异常被吞、汇总行也打不出来。
+    cleanupWarn += `夹具未清：${ROOT} —— ${(e as Error).message.split("\n")[0]}；`;
+  }
 }
 
-console.log(`\n结果: ${passed} passed / ${failed} failed`);
-process.exit(failed === 0 ? 0 : 1);
+if (cleanupWarn) console.log(`\n⚠️ 清理告警（不影响用例结论）：${cleanupWarn}`);
+console.log(`\n结果: ${passed} passed / ${failed} failed${fatal ? "（另有验证中断）" : ""}`);
+process.exit(failed === 0 && !fatal ? 0 : 1);

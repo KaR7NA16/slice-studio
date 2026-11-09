@@ -1,6 +1,9 @@
-// 前端共享助手：转义/时间码/请求/轮询/状态文案/顶栏。被各视图模块引用，本身不渲染整页。
+// 前端共享助手：转义/时间码/请求/轮询/状态文案/顶栏/待办条。被各视图模块引用，本身不渲染整页。
 import type { JobSurvey, LibraryItem, RunRecord, StepState, Survey, TodoItem } from "../shared/types.ts";
 import { icon } from "./icons.ts";
+import { confirmModal, dangerBody, promptModal } from "./modal.ts";
+import { themeButtonHtml } from "./theme.ts";
+import { toast } from "./toast.ts";
 
 export const STATE_TEXT: Record<StepState["status"], string> = {
   ready: "就绪", stale: "待重跑", suspect: "待定", empty: "未跑", error: "出错", missing: "丢失",
@@ -26,6 +29,44 @@ export function jobLabel(title: string, videoPath: string): string {
   return title.trim() || baseName(videoPath);
 }
 
+// ---- 状态消息（就地、不会消失；与「说明」区分开） ----
+
+export type MsgKind = "info" | "ok" | "err" | "busy";
+
+export function setMsg(el: HTMLElement, text: string, kind: MsgKind = "info"): void {
+  el.classList.remove("ok", "err", "busy");
+  if (kind !== "info") el.classList.add(kind);
+  el.textContent = "";
+  if (kind === "busy") {
+    const sp = document.createElement("span");
+    sp.className = "spinner";
+    el.appendChild(sp);
+  } else if (kind === "err") {
+    el.insertAdjacentHTML("beforeend", icon("warn", 12));
+  } else if (kind === "ok") {
+    el.insertAdjacentHTML("beforeend", icon("check", 12));
+  }
+  el.appendChild(document.createTextNode(text));
+}
+
+// 提交期间：按钮禁用 + aria-busy，避免重复点击；无论成败都恢复
+export async function withBusy<T>(btn: HTMLButtonElement | null, fn: () => Promise<T>): Promise<T | undefined> {
+  if (!btn) return await fn();
+  const was = btn.disabled;
+  btn.disabled = true;
+  btn.setAttribute("aria-busy", "true");
+  try {
+    return await fn();
+  } finally {
+    if (btn.isConnected) {
+      btn.disabled = was;
+      btn.removeAttribute("aria-busy");
+    }
+  }
+}
+
+// ---- 任务操作 ----
+
 export function jobTools(j: Pick<JobSurvey, "id" | "title" | "video_path" | "archived">): string {
   const name = jobLabel(j.title, j.video_path);
   const act = j.archived ? "restore" : "archive";
@@ -46,7 +87,12 @@ export function bindJobActions(rerender: () => void): void {
       const name = btn.dataset.jobName ?? id;
       try {
         if (act === "rename") {
-          const next = window.prompt("任务名称（留空则用视频文件名）", btn.dataset.jobTitle ?? "");
+          const next = await promptModal({
+            title: "任务名称",
+            label: "留空则用视频文件名。改名不进 job.json，不会把下游标脏。",
+            value: btn.dataset.jobTitle ?? "",
+            placeholder: name,
+          });
           if (next === null) return;
           await api(`/api/jobs/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ title: next }) });
         } else if (act === "archive" || act === "restore") {
@@ -54,8 +100,18 @@ export function bindJobActions(rerender: () => void): void {
             method: "PATCH",
             body: JSON.stringify({ archived: act === "archive" }),
           });
+          toast(act === "archive" ? `已归档「${name}」` : `已恢复「${name}」`);
         } else if (act === "delete") {
-          if (!window.confirm(`删除任务「${name}」和它下面的片段？\n源视频文件会留在原处。`)) return;
+          const ok = await confirmModal({
+            title: `删除任务「${name}」？`,
+            bodyHtml: dangerBody([
+              "任务下所有片段与产物会一并删除，不可恢复。",
+              "源视频文件留在原处，不会被删除。",
+            ]),
+            confirmLabel: "删除",
+            danger: true,
+          });
+          if (!ok) return;
           await api(`/api/jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
           if (location.hash.startsWith("#/job/") || location.hash.startsWith("#/clip/")) {
             location.hash = "#/";
@@ -64,7 +120,7 @@ export function bindJobActions(rerender: () => void): void {
         }
         rerender();
       } catch (err) {
-        window.alert(err instanceof Error ? err.message : String(err));
+        toast(err instanceof Error ? err.message : String(err), "err");
       }
     });
   });
@@ -96,24 +152,50 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
 export const post = <T>(url: string, body: unknown): Promise<T> =>
   api<T>(url, { method: "POST", body: JSON.stringify(body) });
 
-// 触发 run 并轮询心跳（b53），状态行实时更新；返回是否成功
-export async function runAndPoll(statusEl: HTMLElement, owner: string, step: string, mode: string | null): Promise<boolean> {
-  statusEl.textContent = "启动中…";
+// 触发 run 并轮询心跳（b53）。
+// 三条纪律（此前都没有）：① 每次轮询自己 catch，服务端 5xx 不会变成未处理 rejection；
+// ② 视图被重画/离页后（statusEl 脱离 DOM）立刻停，避免继续打已废弃的 run；
+// ③ 连续 3 次拿不到心跳才判失败——单次抖动不该把一次正常的长任务报成失败。
+export async function runAndPoll(
+  statusEl: HTMLElement,
+  owner: string,
+  step: string,
+  mode: string | null,
+): Promise<boolean> {
+  setMsg(statusEl, "启动中…", "busy");
   let rec: RunRecord;
   try {
     rec = await post<RunRecord>("/api/run", { owner, step, mode });
   } catch (e) {
-    statusEl.textContent = `失败：${e instanceof Error ? e.message : String(e)}`;
+    setMsg(statusEl, `失败：${e instanceof Error ? e.message : String(e)}`, "err");
     return false;
   }
+  let lost = 0;
   for (;;) {
     await new Promise((r) => setTimeout(r, 800));
-    const cur = await api<RunRecord>(`/api/runs/${rec.id}`);
-    statusEl.textContent = cur.message;
-    if (cur.status !== "running") {
-      statusEl.textContent = cur.status === "done" ? `完成：${cur.message}` : `失败：${cur.error ?? cur.message}`;
-      return cur.status === "done";
+    if (!statusEl.isConnected) return false; // 已离页：这不是失败，是没人看了
+    let cur: RunRecord;
+    try {
+      cur = await api<RunRecord>(`/api/runs/${rec.id}`);
+      lost = 0;
+    } catch (e) {
+      lost++;
+      if (lost >= 3) {
+        setMsg(statusEl, `失去与服务端的联系：${e instanceof Error ? e.message : String(e)}`, "err");
+        return false;
+      }
+      setMsg(statusEl, "连接波动，正在重试…", "busy");
+      continue;
     }
+    if (cur.status !== "running") {
+      if (cur.status === "done") {
+        setMsg(statusEl, `完成：${cur.message}`, "ok");
+        return true;
+      }
+      setMsg(statusEl, `失败：${cur.error ?? cur.message}`, "err");
+      return false;
+    }
+    setMsg(statusEl, cur.message, "busy");
   }
 }
 
@@ -144,17 +226,47 @@ export function sentenceHint(s00: StepState): string {
   return "句流读取失败";
 }
 
-export function renderTodo(s: Survey): string {
-  const chips = s.todo
-    .map((t) => `<span class="${TODO_CLS[t.kind]}" title="${esc(t.owner)}">${icon(TODO_ICON[t.kind], 11)}${esc(t.text)}</span>`)
+// ---- 待办条（b5）：回答「现在该干什么」，并且能点进那一步 ----
+
+// ctx 省略 = 总览页（列全部）；任务页只列本任务相关；片段页只列本片段。
+export function renderTodo(s: Survey, ctx?: { kind: "job" | "clip"; id: string }): string {
+  const jobIds = new Set(s.jobs.map((j) => j.id));
+  const clipToJob = new Map(s.clips.map((c) => [c.id, c.job_id]));
+  const inCtx = (t: TodoItem): boolean => {
+    if (!ctx) return true;
+    if (ctx.kind === "clip") return t.owner === ctx.id;
+    return t.owner === ctx.id || clipToJob.get(t.owner) === ctx.id;
+  };
+  const href = (t: TodoItem): string => {
+    const isJob = jobIds.has(t.owner);
+    const base = isJob ? `#/job/${encodeURIComponent(t.owner)}` : `#/clip/${encodeURIComponent(t.owner)}`;
+    return t.step ? `${base}/${encodeURIComponent(t.step)}` : base;
+  };
+  const items = s.todo.filter(inCtx);
+  // 同文案同类别的多条（例如两个片段都「人声分离 未跑」）合并成一条 + 条数，
+  // 否则待办条上会出现两条一模一样的 chip，看起来像渲染重复。
+  const merged = new Map<string, { t: TodoItem; n: number; owners: string[] }>();
+  for (const t of items) {
+    const key = `${t.kind}|${t.step ?? ""}|${t.text}`;
+    const hit = merged.get(key);
+    if (hit) {
+      hit.n++;
+      hit.owners.push(t.owner);
+    } else {
+      merged.set(key, { t, n: 1, owners: [t.owner] });
+    }
+  }
+  const chips = [...merged.values()]
+    .map(({ t, n, owners }) => `<a class="${TODO_CLS[t.kind]}" href="${href(t)}" data-owner="${esc(t.owner)}" data-step="${esc(t.step ?? "")}" title="${n > 1 ? `${n} 条：${owners.join("、")}` : "去处理"}">${icon(TODO_ICON[t.kind], 11)}${esc(t.text)}${n > 1 ? `<span class="badge">×${n}</span>` : ""}</a>`)
     .join("");
-  return `<div class="todo"><span class="label">待办</span>${chips}</div>`;
+  return `<div class="todo"><span class="label">待办</span>${chips || `<span class="none">没有待办</span>`}</div>`;
 }
 
 export const topbar = (right: string): string => `
   <div class="topbar">
     <a class="brand link" href="#/">切片助手</a>
     <span class="spacer"></span>
+    ${themeButtonHtml()}
     ${right}
   </div>`;
 

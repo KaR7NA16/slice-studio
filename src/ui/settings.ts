@@ -9,7 +9,9 @@
 import { STEPS } from "../shared/steps.ts";
 import type { AutomationSettings, LlmSave, LlmView } from "../shared/types.ts";
 import { icon } from "./icons.ts";
-import { api, app, esc, topbar } from "./lib.ts";
+import { api, app, esc, setMsg, topbar } from "./lib.ts";
+import { confirmModal, dangerBody } from "./modal.ts";
+import { toast } from "./toast.ts";
 
 type Draft = { id: string; name: string; base_url: string; api_key: string; model: string };
 
@@ -121,7 +123,7 @@ export async function viewSettings(rerender: () => void): Promise<void> {
         <button class="btn" id="st-test">测试连接</button>
         <button class="btn primary" id="st-save">保存</button>
         <button class="btn" id="st-reload">放弃修改并重载</button>
-        <span class="hint" id="st-msg"></span>
+        <span class="msg" id="st-msg"></span>
       </div>
 
       <div class="section-title">全局自动化档位（片段可逐条覆盖）</div>
@@ -146,8 +148,14 @@ export async function viewSettings(rerender: () => void): Promise<void> {
     cur = ds.length - 1;
     void viewSettings(rerender);
   });
-  document.getElementById("st-del")!.addEventListener("click", () => {
-    if (!confirm(`删除配置档「${draftName(d)}」？`)) return;
+  document.getElementById("st-del")!.addEventListener("click", async () => {
+    const ok = await confirmModal({
+      title: `删除配置档「${draftName(d)}」？`,
+      bodyHtml: dangerBody(["这一档的地址、模型与已保存的密钥会一并删掉。", "如果它是默认档，默认档会落到剩下的第一档。"]),
+      confirmLabel: "删除",
+      danger: true,
+    });
+    if (!ok) return;
     ds.splice(cur, 1);
     if (defaultId === d.id) defaultId = ds[0]?.id ?? null;
     if (ds.length === 0) ds.push(newDraft());
@@ -165,14 +173,14 @@ export async function viewSettings(rerender: () => void): Promise<void> {
   });
   document.getElementById("st-fetch")!.addEventListener("click", async () => {
     syncFromDom();
-    msg.textContent = "拉取中…";
+    setMsg(msg, "拉取中…", "busy");
     try {
       const r = await api<{ ok: boolean; models?: string[]; reason?: string }>("/api/llm/models", {
         method: "POST",
         body: JSON.stringify({ profile_id: d.id, base_url: d.base_url, api_key: d.api_key }),
       });
       if (!r.ok) {
-        msg.textContent = r.reason ?? "拉取失败";
+        setMsg(msg, r.reason ?? "拉取失败", "err");
         return;
       }
       const models = r.models ?? [];
@@ -180,28 +188,28 @@ export async function viewSettings(rerender: () => void): Promise<void> {
       (document.getElementById("st-models") as HTMLDataListElement).innerHTML = models
         .map((m) => `<option value="${esc(m)}"></option>`)
         .join("");
-      msg.textContent = `拉到 ${models.length} 个模型——点「模型」输入框可选，例如 ${models[0]}`;
+      setMsg(msg, `拉到 ${models.length} 个模型——点「模型」输入框可选，例如 ${models[0]}`, "ok");
     } catch (e) {
-      msg.textContent = e instanceof Error ? e.message : String(e);
+      setMsg(msg, e instanceof Error ? e.message : String(e), "err");
     }
   });
   document.getElementById("st-test")!.addEventListener("click", async () => {
     syncFromDom();
-    msg.textContent = "测试中…";
+    setMsg(msg, "测试中…", "busy");
     try {
       const r = await api<{ ok: boolean; reason?: string; reply?: string }>("/api/llm/test", {
         method: "POST",
         body: JSON.stringify({ profile_id: d.id, base_url: d.base_url, api_key: d.api_key, model: d.model }),
       });
-      msg.textContent = r.ok ? `连接成功${r.reply ? `：${r.reply}` : ""}` : (r.reason ?? "测试失败");
+      setMsg(msg, r.ok ? `连接成功${r.reply ? `：${r.reply}` : ""}` : (r.reason ?? "测试失败"), r.ok ? "ok" : "err");
     } catch (e) {
-      msg.textContent = e instanceof Error ? e.message : String(e);
+      setMsg(msg, e instanceof Error ? e.message : String(e), "err");
     }
   });
   document.getElementById("st-save")!.addEventListener("click", async () => {
     syncFromDom();
     const body: LlmSave = { profiles: ds.map((x) => ({ ...x })), default_id: defaultId };
-    msg.textContent = "保存中…";
+    setMsg(msg, "保存中…", "busy");
     try {
       const v = await api<LlmView>("/api/llm", { method: "PUT", body: JSON.stringify(body) });
       drafts = v.profiles.map((p) => ({ id: p.id, name: p.name, base_url: p.base_url, api_key: "", model: p.model }));
@@ -213,9 +221,9 @@ export async function viewSettings(rerender: () => void): Promise<void> {
       if (drafts.length === 0) drafts.push(newDraft());
       await viewSettings(rerender);
       // 重画后 msg 是旧元素，提示写到新的那个上
-      document.getElementById("st-msg")!.textContent = v.ok ? "已保存：默认档可用" : `已保存。${v.reason ?? ""}`;
+      setMsg(document.getElementById("st-msg")!, v.ok ? "已保存：默认档可用" : `已保存。${v.reason ?? ""}`, v.ok ? "ok" : "err");
     } catch (e) {
-      msg.textContent = e instanceof Error ? e.message : String(e);
+      setMsg(msg, e instanceof Error ? e.message : String(e), "err");
     }
   });
 
@@ -231,7 +239,7 @@ export async function viewSettings(rerender: () => void): Promise<void> {
       try {
         await api("/api/automation/global", { method: "PUT", body: JSON.stringify({ settings: next }) });
       } catch (e) {
-        alert(e instanceof Error ? e.message : String(e));
+        toast(e instanceof Error ? e.message : String(e), "err");
       }
       void viewSettings(rerender);
     });

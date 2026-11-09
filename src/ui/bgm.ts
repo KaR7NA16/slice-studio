@@ -6,7 +6,8 @@
 //   ② 人工换曲**不改 bgm.json**（b29/b46），所以重跑 s04 不会抹掉你换的曲子；界面上标出来源。
 import type { S04View, StepState } from "../shared/types.ts";
 import { icon } from "./icons.ts";
-import { api, esc, fmtBytes, post } from "./lib.ts";
+import { api, esc, fmtBytes, post, setMsg, withBusy } from "./lib.ts";
+import { toast } from "./toast.ts";
 import { automationRow, canRun, depHint, runWithConfirm } from "./panel.ts";
 import type { AutomationView } from "../shared/types.ts";
 
@@ -61,41 +62,50 @@ export async function s04Panel(
     .join("");
 
   host.innerHTML = `
-    <div class="ws-head">${icon("music")} 配乐 ${automationRow(auto, "s04")}</div>
-    <div class="form-card">
-      <span class="hint">风格</span>
-      <select class="text" id="bgm-mood">
-        <option value="">按内容自动挑（需要已配置的 LLM）</option>
-        ${v.moods.map((m) => `<option value="${esc(m)}"${v.bgm_mood === m ? " selected" : ""}>${esc(m)}</option>`).join("")}
-      </select>
+    <div class="card ws-card">
+      <div class="ws-head">${icon("music")} 配乐 ${automationRow(auto, "s04")}</div>
+      <div class="form-card">
+        <span class="hint">风格</span>
+        <select class="text" id="bgm-mood">
+          <option value="">按内容自动挑（需要已配置的 LLM）</option>
+          ${v.moods.map((m) => `<option value="${esc(m)}"${v.bgm_mood === m ? " selected" : ""}>${esc(m)}</option>`).join("")}
+        </select>
+      </div>
+      <div class="actions">
+        <button class="btn" id="run-s04"${canStart ? "" : " disabled"}>${icon("refresh", 12)} ${st.status === "empty" ? "跑一次" : "重跑"}</button>
+        <span class="msg" id="s04-status"></span>
+      </div>
+      ${depHint(st, byId, linkFor)}
+      ${v.missing_pick ? `<div class="warn-box inset">${icon("warn", 12)}你人工选的那首已不在曲库（${esc(v.pick!.track_id)}）——s05 出片会因此报错。重新入库、换一首，或清除人工选择。</div>` : ""}
     </div>
-    <div class="actions">
-      <button class="btn" id="run-s04"${canStart ? "" : " disabled"}>${icon("refresh", 12)} ${st.status === "empty" ? "跑一次" : "重跑"}</button>
-      <span class="hint" id="s04-status"></span>
-    </div>
-    ${depHint(st, byId, linkFor)}
-    ${v.missing_pick ? `<div class="warn-box">${icon("warn", 12)}你人工选的那首已不在曲库（${esc(v.pick!.track_id)}）——s05 出片会因此报错。重新入库、换一首，或清除人工选择。</div>` : ""}
     <div class="section-title">当前生效</div>
-    ${effective}
-    <div class="section-title">曲库（${v.total} 首，全部可试听）</div>
-    <audio id="bgm-audio" controls preload="none" style="width:100%"></audio>
-    <div class="tracks">${groups || `<div class="empty-hint">曲库里没有 bgm——回总览页填素材目录，重新入库</div>`}</div>`;
+    <div class="card">${effective}</div>
+    <div class="section-title">曲库 <span class="meta">${v.total} 首，全部可试听</span></div>
+    <div class="card">
+      <div class="form-card"><audio id="bgm-audio" controls preload="none"></audio></div>
+      <div class="tracks">${groups || `<div class="empty-hint">曲库里没有 bgm——回总览页选素材目录，重新入库</div>`}</div>
+    </div>`;
 
+  const s04Status = document.getElementById("s04-status")!;
   if (needsLlm && !llm.ok) {
-    document.getElementById("s04-status")!.innerHTML =
-      `${esc(llm.reason ?? "")} <a class="link" href="#/settings">去设置</a>，或先在上面选定风格。`;
+    s04Status.classList.add("err");
+    s04Status.innerHTML = `${esc(llm.reason ?? "")} <a class="link" href="#/settings">去设置</a>，或先在上面选定风格。`;
   }
   document.getElementById("bgm-mood")!.addEventListener("change", async (ev) => {
     const mood = (ev.target as HTMLSelectElement).value;
     try {
       await post(`/api/clips/${encodeURIComponent(clipId)}/s04/params`, { bgm_mood: mood || null });
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
+      setMsg(s04Status, e instanceof Error ? e.message : String(e), "err");
+      return;
     }
     rerender();
   });
-  document.getElementById("run-s04")!.addEventListener("click", async () => {
-    if (await runWithConfirm(document.getElementById("s04-status")!, owner, "s04", null)) rerender();
+  const runS04 = document.getElementById("run-s04") as HTMLButtonElement;
+  runS04.addEventListener("click", async () => {
+    await withBusy(runS04, async () => {
+      if (await runWithConfirm(s04Status, owner, "s04", null)) rerender();
+    });
   });
   const audio = document.getElementById("bgm-audio") as HTMLAudioElement;
   for (const b of Array.from(host.querySelectorAll<HTMLButtonElement>(".track .play"))) {
@@ -111,7 +121,7 @@ export async function s04Panel(
         await post(`/api/clips/${encodeURIComponent(clipId)}/s04/pick`, { track_id: b.dataset.id });
       } catch (e) {
         b.disabled = false;
-        alert(e instanceof Error ? e.message : String(e));
+        setMsg(s04Status, e instanceof Error ? e.message : String(e), "err");
         return;
       }
       rerender();
@@ -120,8 +130,9 @@ export async function s04Panel(
   document.getElementById("bgm-clear")?.addEventListener("click", async () => {
     try {
       await post(`/api/clips/${encodeURIComponent(clipId)}/s04/pick`, { track_id: null });
+      toast("已清除人工换曲，回到 s04 产物");
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
+      setMsg(s04Status, e instanceof Error ? e.message : String(e), "err");
       return;
     }
     rerender();

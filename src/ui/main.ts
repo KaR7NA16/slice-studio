@@ -1,12 +1,14 @@
 // 界面入口（Vite + TS 无框架，b13；直接 DOM 渲染，哈希路由）。
-// 视图：#/ 总览、#/job/<id>[/<step>] 任务工作空间（s00 字幕 / s01 选高光）、
+// 视图：#/ 总览、#/job/<id>[/<step>] 任务工作空间（审片 / 字幕 / AI 抽卡）、
 //       #/clip/<id>[/<tab>] 片段工作空间（s02/s03/s04/s05 + 分叉树）、#/settings。
 //
-// 每个视图只负责自己的 DOM 与接线；共用件在 lib.ts（工具/顶栏/待办条）、panel.ts（档位/预览/分叉树）。
+// 每个视图只负责自己的 DOM 与接线；共用件在 lib.ts（工具/顶栏/待办条）、panel.ts（档位/预览/分叉树）、
+// playback.ts（播放联动）、picker.ts（文件选择）、modal.ts / toast.ts（反馈）。
 import { viewClip } from "./clip.ts";
 import { viewHome } from "./home.ts";
 import { viewJob } from "./job.ts";
 import { viewSettings } from "./settings.ts";
+import { wireThemeButton } from "./theme.ts";
 
 type Route =
   | { view: "home" }
@@ -30,11 +32,15 @@ async function render(): Promise<void> {
     await viewJob(r.id, again);
     // 深链 #/job/<id>/s01 要能定位到那个工作空间（b59 的「入口」就靠它）
     if (r.step) document.getElementById(`step-${r.step}`)?.scrollIntoView({ block: "start" });
-    return;
+  } else if (r.view === "clip") {
+    await viewClip(r.id, r.tab, again);
+  } else if (r.view === "settings") {
+    await viewSettings(again);
+  } else {
+    await viewHome(again);
   }
-  if (r.view === "clip") return void (await viewClip(r.id, r.tab, again));
-  if (r.view === "settings") return void (await viewSettings(again));
-  return void (await viewHome(again));
+  // 主题按钮随每次重画重新接线（视图各画各的 innerHTML，事件不跟着走）
+  wireThemeButton();
 }
 
 window.addEventListener("hashchange", () => void render());

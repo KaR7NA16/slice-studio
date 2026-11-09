@@ -4,6 +4,8 @@
 import type { AutomationView, RunPreview, StepState, VariantsView } from "../shared/types.ts";
 import { icon } from "./icons.ts";
 import { STATE_TEXT, api, esc, post, runAndPoll } from "./lib.ts";
+import { confirmModal, mountShell, openModal } from "./modal.ts";
+import { toast } from "./toast.ts";
 
 // ---- b59：依赖未就绪 = 禁用 + 原因 + 入口 ----
 
@@ -73,7 +75,7 @@ export async function wireAutomation(owner: string, rerender: () => void): Promi
         try {
           await api(`/api/automation/${owner}`, { method: "PUT", body: JSON.stringify({ settings: next, scope }) });
         } catch (e) {
-          alert(e instanceof Error ? e.message : String(e));
+          toast(e instanceof Error ? e.message : String(e), "err");
         }
         rerender();
       });
@@ -83,7 +85,7 @@ export async function wireAutomation(owner: string, rerender: () => void): Promi
 
 // ---- b39：重跑确认页（只列将动哪些文件、不估时长） ----
 
-function previewHtml(p: RunPreview): string {
+function previewBody(p: RunPreview): string {
   const writes = p.writes.map((w) => `<li class="num">${esc(w)}</li>`).join("");
   const stale = p.marks_stale.length
     ? p.marks_stale.map((s) => `<li>${esc(s.step)} ${esc(s.title)}</li>`).join("")
@@ -91,21 +93,10 @@ function previewHtml(p: RunPreview): string {
   const warn = p.warnings.length
     ? `<div class="warn-box">${p.warnings.map((w) => `<div>${icon("warn", 12)}${esc(w)}</div>`).join("")}</div>`
     : "";
-  return `<div class="modal">
-    <div class="modal-card">
-      <div class="modal-head">重跑 ${esc(p.step)} ${esc(p.title)}</div>
-      <div class="modal-body">
-        <div class="pv-col"><div class="pv-title">将写入 / 覆盖</div><ul>${writes}</ul></div>
-        <div class="pv-col"><div class="pv-title">重跑后会被标脏的下游</div><ul>${stale}</ul></div>
-        ${warn}
-        <div class="hint">不估时长——这里只列事实。</div>
-      </div>
-      <div class="modal-foot">
-        <button class="btn" id="pv-cancel">取消</button>
-        <button class="btn primary" id="pv-go">确认重跑</button>
-      </div>
-    </div>
-  </div>`;
+  return `<div class="pv-col"><div class="pv-title">将写入 / 覆盖</div><ul>${writes}</ul></div>
+    <div class="pv-col"><div class="pv-title">重跑后会被标脏的下游</div><ul>${stale}</ul></div>
+    ${warn}
+    <div class="hint">不估时长——这里只列事实。</div>`;
 }
 
 // 弹出重跑预览并等用户确认。返回 true = 用户点了确认。
@@ -116,19 +107,23 @@ export async function confirmRun(owner: string, step: string, mode: string | nul
     p = await api<RunPreview>(`/api/preview/${owner}/${step}${q}`);
   } catch (e) {
     // 预览取不到（如未知步）不该静默放行——把原因摊开，让人自己决定
-    return confirm(`取重跑预览失败：${e instanceof Error ? e.message : String(e)}\n仍要直接重跑吗？`);
+    return await confirmModal({
+      title: "取重跑预览失败",
+      bodyHtml: `<div class="warn-box">${icon("warn", 12)}${esc(e instanceof Error ? e.message : String(e))}</div>
+        <div class="hint">没有预览就重跑，会跳过「将动哪些文件」这一步。仍要继续吗？</div>`,
+      confirmLabel: "仍要重跑",
+      danger: true,
+    });
   }
-  return await new Promise<boolean>((resolve) => {
-    const host = document.createElement("div");
-    host.innerHTML = previewHtml(p);
-    document.body.appendChild(host);
-    const done = (v: boolean): void => {
-      host.remove();
-      resolve(v);
-    };
-    host.querySelector("#pv-cancel")!.addEventListener("click", () => done(false));
-    host.querySelector("#pv-go")!.addEventListener("click", () => done(true));
+  const v = await openModal({
+    title: `重跑 ${esc(p.step)} ${esc(p.title)}`,
+    bodyHtml: previewBody(p),
+    actions: [
+      { label: "取消", value: "cancel" },
+      { label: "确认重跑", value: "ok", kind: "primary", autofocus: true },
+    ],
   });
+  return v === "ok";
 }
 
 // 带确认的重跑入口（所有「跑/重跑」按钮都走它，避免有一处忘了确认）
@@ -180,7 +175,7 @@ export async function wireTree(owner: string, rerender: () => void): Promise<voi
         await post(`/api/variants/${owner}/${b.dataset.step}/${b.dataset.vid}/activate`, {});
       } catch (e) {
         b.disabled = false;
-        alert(e instanceof Error ? e.message : String(e));
+        toast(e instanceof Error ? e.message : String(e), "err");
         return;
       }
       rerender();

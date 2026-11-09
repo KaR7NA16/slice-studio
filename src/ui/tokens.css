@@ -1,99 +1,136 @@
-/* Claude 产品界面令牌。平面、无渐变、无投影。字重只有 400 和 500。
-   组件继续用短名；短名指向下面这组变量。 */
+/* 设计令牌 · 唯一来源（规划 v2.8 / b10·b11）。
+   规则（由 tools/verify-tokens.ts 强制）：
+   1. 颜色、字号、圆角只能出现在本文件；app.css 里出现一处字面量即失败。
+   2. 字号三档：13 正文 / 12 辅助 / 11 时间码与徽标；行高三档：32 / 28 / 24。
+   3. 圆角两档：8 控件 / 10 卡片。平面、无投影；材质只给顶栏与待办条。
+   4. 分隔线用 --border（不承担识别作用）；控件边界必须用 --border-input（≥3:1）。 */
 
 :root {
+  color-scheme: light;
+
+  /* 表面：0 页面底 · 1 抬升面（chip / 未选中 tab / 徽标）· 2 卡片 */
   --surface-0: #f7f6f3;
-  --surface-1: #ffffff;
+  --surface-1: #fbfaf7;
   --surface-2: #ffffff;
+
   --text-primary: #1a1916;
   --text-secondary: #5c5a54;
-  --text-muted: #8a877e;
-  --border: #e4e2da;
+  --text-muted: #6f6c63; /* 白卡 5.2:1 · 页底 4.9:1（旧值 #8a877e 只有 3.6:1） */
+
+  --border: #e4e2da; /* 仅分隔线 */
+  --border-input: #8f8b82; /* 控件边界：白底 3.4:1 · 页底 3.2:1 */
   --border-strong: #c8c4b8;
   --border-stronger: #1a1916;
-  --bg-accent: #1a1916;
-  --text-accent: #1a1916;
+
+  --accent: #1a1916; /* 单色身份：主色即墨色 */
+  --on-accent: #ffffff;
+  --focus: #1a1916;
+
   --bg-success: #e7f0e4;
   --text-success: #3d6b32;
   --bg-warning: #f6efe2;
   --text-warning: #8a5a12;
   --bg-danger: #f8e8e6;
   --text-danger: #8d342c;
-  --font-sans: "Anthropic Sans", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --font-voice: "Anthropic Serif", Georgia, "Songti SC", serif;
-  --font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
-  --radius: 8px;
-  --pad-sm: 8px;
-  --pad-md: 12px;
-  --pad-lg: 16px;
-  --pad-xl: 24px;
-  --gap-xs: 4px;
-  --gap-sm: 8px;
-  --gap-md: 12px;
-  --gap-lg: 16px;
-  --gap-xl: 24px;
 
-  --bg: var(--surface-0);
-  --surface: var(--surface-1);
-  --text: var(--text-primary);
-  --text-2: var(--text-secondary);
-  --text-3: var(--text-muted);
-  --accent: var(--text-primary);
-  --on-accent: var(--surface-2);
-  --separator: var(--border);
-  --bar-bg: var(--surface-0);
+  --bg-selected: color-mix(in srgb, var(--accent) 8%, transparent);
+  --bg-current: #f1ece0; /* 当前播放句；另配 2px 左条，不靠色差单独表意 */
+  --media-bg: #0b0b0a; /* 视频底，明暗恒定：审片时周围不能发光 */
+  --scrim: rgba(20, 20, 19, 0.42);
+  --bar-surface: color-mix(in srgb, var(--surface-0) 82%, transparent);
+
+  --font-sans: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", "PingFang SC",
+    "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "Consolas", "SF Mono", monospace;
+
+  --fs: 13px;
+  --fs-sm: 12px;
+  --fs-xs: 11px;
+  --fs-head: 14px;
+  --fs-brand: 15px;
+
+  --row-h: 32px;
+  --row-h-sm: 28px;
+  --row-h-xs: 24px;
+  --bar-h: 44px;
+
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-card: 10px;
+
+  --pad-1: 4px;
+  --pad-2: 8px;
+  --pad-3: 12px;
+  --pad-4: 16px;
+  --pad-5: 24px;
+
   --st-ready: var(--text-success);
   --st-stale: var(--text-warning);
   --st-suspect: var(--text-secondary);
   --st-empty: var(--text-muted);
   --st-error: var(--text-danger);
   --st-missing: var(--text-danger);
-
-  --fs: 16px;
-  --fs-sm: 13px;
-  --fs-title: 16px;
-  --row-h: 36px;
-  --row-h-sm: 36px;
-  --pad: var(--pad-sm);
-  --pad-2: var(--pad-lg);
-  --radius-sm: 8px;
-  --font: var(--font-sans);
-  --mono: var(--font-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --surface-0: #1c1b19;
-    --surface-1: #262522;
-    --surface-2: #262522;
-    --text-primary: #f4f2ea;
-    --text-secondary: #c2bfb6;
-    --text-muted: #8e8b82;
-    --border: #3a3834;
-    --border-strong: #5c5952;
-    --border-stronger: #f4f2ea;
-    --bg-accent: #f4f2ea;
-    --text-accent: #f4f2ea;
-    --bg-success: #243024;
-    --text-success: #b7d4ae;
-    --bg-warning: #332a1c;
-    --text-warning: #e2c48a;
-    --bg-danger: #3a2422;
-    --text-danger: #f0b2ab;
-    --on-accent: var(--surface-0);
-  }
+/* 主题由 JS 解析成 light / dark 两值后写到 <html data-theme>：
+   auto 不是第三种配色，只是「按系统解析」的存储值。因此这里只有一处暗色定义。 */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --surface-0: #1a1917;
+  --surface-1: #232220;
+  --surface-2: #2a2926;
+
+  --text-primary: #f4f2ea;
+  --text-secondary: #c2bfb6;
+  --text-muted: #a5a29a; /* 卡片 5.7:1 */
+
+  --border: #3a3834;
+  --border-input: #7d7970; /* 卡片 3.3:1 */
+  --border-strong: #5c5952;
+  --border-stronger: #f4f2ea;
+
+  --accent: #f4f2ea;
+  --on-accent: #1a1917;
+  --focus: #f4f2ea;
+
+  --bg-success: #243024;
+  --text-success: #b7d4ae;
+  --bg-warning: #332a1c;
+  --text-warning: #e2c48a;
+  --bg-danger: #3a2422;
+  --text-danger: #f0b2ab;
+
+  --bg-current: #332e22;
+  --scrim: rgba(0, 0, 0, 0.58);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body { height: 100%; }
+
 body {
   background: var(--surface-0);
   color: var(--text-primary);
-  font: 400 16px/1.7 var(--font-sans);
+  font: 400 var(--fs) / 1.6 var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 .num, time, .sha { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
 ::selection { background: var(--border-strong); }
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

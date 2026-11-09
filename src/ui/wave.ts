@@ -58,10 +58,12 @@ export async function drawWave(canvas: HTMLCanvasElement, url: string, opts: Wav
   g.scale(dpr, dpr);
 
   const style = getComputedStyle(document.documentElement);
-  const cLine = style.getPropertyValue("--accent").trim() || "#4a7dff";
-  const cDim = style.getPropertyValue("--text-3").trim() || "#8a8f98";
-  const cCut = style.getPropertyValue("--st-error").trim() || "#e5484d";
-  const cSep = style.getPropertyValue("--separator").trim() || "#e6e8eb";
+  // 颜色一律取自令牌（tokens.css 是唯一来源）；兜底值也是中性色，不再有「蓝色线条」这种第二身份。
+  // 兜底值重复了一份色值，因此逐行标注来源，让「重复」在仓库里可 grep（tools/verify-tokens.ts 会扫）。
+  const cLine = style.getPropertyValue("--accent").trim() || "#1a1916"; // token-fallback: --accent
+  const cDim = style.getPropertyValue("--text-muted").trim() || "#6f6c63"; // token-fallback: --text-muted
+  const cCut = style.getPropertyValue("--st-error").trim() || "#8d342c"; // token-fallback: --st-error
+  const cSep = style.getPropertyValue("--border").trim() || "#e4e2da"; // token-fallback: --border
 
   g.clearRect(0, 0, cssW, cssH);
   // 时间轴：x = (t - span.start) / span 长度 * 宽

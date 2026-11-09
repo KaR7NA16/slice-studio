@@ -3,7 +3,20 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
     <title>切片助手</title>
+    <!-- 首屏主题：样式生效前解析，避免暗色下先闪一帧白底 -->
+    <script>
+      (function () {
+        try {
+          var c = localStorage.getItem("ss-theme") || "auto";
+          var dark = c === "dark" || (c === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.dataset.theme = dark ? "dark" : "light";
+        } catch (e) {
+          document.documentElement.dataset.theme = "light";
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./app.css" />
   </head>

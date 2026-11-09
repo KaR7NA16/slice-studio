@@ -2,12 +2,13 @@
 //
 // 四个面板**一次性都渲染进 DOM**、用 hidden 切显隐，而不是「切 tab 才拉数据」：
 // 本地服务端，四个请求的代价远小于「切一下卡一下」；也避免了每个 tab 各写一套加载态。
-import { CUT_GAP, filmRanges, filmSeconds, previewJump } from "../shared/cut.ts";
+import { CUT_GAP, filmRanges, filmSeconds } from "../shared/cut.ts";
 import type { AutomationView, S03View, StepState, Survey, VariantsView } from "../shared/types.ts";
 import { s04Panel } from "./bgm.ts";
 import { icon } from "./icons.ts";
-import { api, app, esc, notFound, renderTodo, stepChips, tc, topbar } from "./lib.ts";
+import { STATE_TEXT, api, app, esc, notFound, renderTodo, setMsg, tc, topbar, withBusy } from "./lib.ts";
 import { automationRow, canRun, depHint, runWithConfirm, treeHtml, wireAutomation, wireTree } from "./panel.ts";
+import { mountPlayback } from "./playback.ts";
 import { drawWave } from "./wave.ts";
 
 const TABS = [
@@ -54,10 +55,13 @@ export async function viewClip(id: string, tab: string, rerender: () => void): P
     ${renderTodo(survey)}
     <div class="main ws">
       <div class="card">
-        <div class="card-head">${icon("cut")} ${esc(clip.title)} <span class="num">${esc(id)}</span>
+        <div class="card-head">${icon("film")} ${esc(clip.title)} <span class="num">${esc(id)}</span>
           <span class="sub num">${tc(clip.start)} – ${tc(clip.end)}</span></div>
-        <div class="steps-line">${stepChips(clip.steps)}</div>
-        <div class="tabs">${TABS.map((t) => `<button class="tab${t.id === cur ? " on" : ""}" data-tab="${t.id}">${esc(t.id)} ${esc(t.title)}</button>`).join("")}</div>
+        <div class="tabs">${TABS.map((t) => {
+          const st = byId.get(t.id);
+          return `<button class="tab${t.id === cur ? " on" : ""}" data-tab="${t.id}" title="${esc(st ? `${t.title}：${STATE_TEXT[st.status]}` : t.title)}">
+            ${st ? `<span class="dot ${st.status}"></span>` : ""}${esc(t.title)}${st ? `<span class="tab-id">${esc(t.id)}</span>` : ""}</button>`;
+        }).join("")}</div>
       </div>
 
       <div class="panel" id="panel-s02"${cur === "s02" ? "" : " hidden"}>
@@ -65,7 +69,7 @@ export async function viewClip(id: string, tab: string, rerender: () => void): P
           <div class="ws-head">${icon("wave")} 人声分离 ${automationRow(auto, "s02")}</div>
           <div class="actions">
             <button class="btn" id="run-s02"${canRun(s02, byId) ? "" : " disabled"}>${icon("refresh", 12)} ${s02.status === "empty" ? "跑一次" : "重跑"}</button>
-            <span class="hint" id="s02-status"></span>
+            <span class="msg" id="s02-status"></span>
           </div>
           ${depHint(s02, byId, linkFor)}
           <div class="hint block">demucs htdemucs 分离；权重随包预置在数据根，运行时不联网。</div>
@@ -80,13 +84,15 @@ export async function viewClip(id: string, tab: string, rerender: () => void): P
           <div class="actions">
             <button class="btn" id="run-build"${canRun(s03, byId) ? "" : " disabled"}>${icon("refresh", 12)} 重建句流</button>
             <button class="btn" id="run-draft"${canRun(s03, byId) ? "" : " disabled"}>${icon("spark", 12)} AI 出初稿</button>
-            <span class="hint" id="llm-reason"></span>
-            <span class="hint" id="run-status"></span>
+            <span class="msg" id="llm-reason"></span>
+            <span class="msg" id="run-status"></span>
           </div>
           ${depHint(s03, byId, linkFor)}
           <div class="hint block">人工改判写覆盖层（b29）——重跑构建或重抽 AI 都不会丢。</div>
         </div>
-        <video class="player" id="player" controls preload="metadata" src="/api/media/job/${encodeURIComponent(clip.job_id)}/video"></video>
+        <div class="card player-card">
+          <video class="player" id="player" controls preload="metadata" src="/api/media/job/${encodeURIComponent(clip.job_id)}/video"></video>
+        </div>
         <div class="preview-bar">
           <label><input type="checkbox" id="preview-cut" checked /> 成片预览</label>
           <span class="hint" id="preview-len"></span>
@@ -94,7 +100,7 @@ export async function viewClip(id: string, tab: string, rerender: () => void): P
         <div class="section-title" id="s03-wave-title"></div>
         <div class="card wave-card" id="s03-wave-box" hidden><canvas id="s03-wave" height="120"></canvas></div>
         <div class="section-title" id="s03-info"></div>
-        <div class="card sents" id="s03-sents"></div>
+        <div class="card sents" id="s03-sents" role="listbox" aria-label="句流"></div>
       </div>
 
       <div class="panel" id="panel-s04"${cur === "s04" ? "" : " hidden"}></div>
@@ -104,7 +110,7 @@ export async function viewClip(id: string, tab: string, rerender: () => void): P
           <div class="ws-head">${icon("film")} 成片 ${automationRow(auto, "s05")}</div>
           <div class="actions">
             <button class="btn" id="run-s05"${canRun(s05, byId) ? "" : " disabled"}>${icon("refresh", 12)} ${s05.status === "empty" ? "出片" : "重出"}</button>
-            <span class="hint" id="s05-status"></span>
+            <span class="msg" id="s05-status"></span>
           </div>
           ${depHint(s05, byId, linkFor)}
           <div class="hint block">成片与素材包**两个出口并列**（b24）——只出一个不算完成。</div>
@@ -178,16 +184,20 @@ async function wireS03(
   const infoEl = document.getElementById("s03-info")!;
   const statusEl = document.getElementById("run-status")!;
   let rowEls: HTMLElement[] = [];
-  let curIdx = -1;
   let previewOn = true;
-  let holdEnd = false;
-  let armTimer = 0;
-  let lastSeekTo = -1;
-  let lastSeekFrom = -1;
-  let lastSeekAt = 0;
   let paintWave: (() => Promise<void>) | null = null;
 
   const rangesNow = (): [number, number][] => (view ? filmRanges(view.sentences, clip) : []);
+
+  // 播放联动与任务页共用同一份实现（playback.ts）：跟随高亮、跳段、防抖 seek 都在那里
+  const pb = mountPlayback({
+    player,
+    sentences: () => view?.sentences ?? [],
+    rows: () => rowEls,
+    bounds: () => clip,
+    list: () => listEl,
+    preview: () => previewOn,
+  });
 
   const paintPreview = (): void => {
     const el = document.getElementById("preview-len");
@@ -203,61 +213,20 @@ async function wireS03(
       : "没有保留句，播放会停住";
   };
 
-  // 到点再跳，而不是等 timeupdate（大约 4 次/秒）才发现已经播进被删的句子。
-  // 400ms 内不重复跳同一个点：视频 seek 不了的时候，否则会在同一处空转。
-  const guardedSeek = (t: number): void => {
-    if (Math.abs(player.currentTime - t) < 0.03) return;
-    const now = performance.now();
-    // 同一次失败的 seek（播放头没动）400ms 内不再打。播放头已经到了别处，就照常跳。
-    if (Math.abs(lastSeekTo - t) < 0.02 && Math.abs(lastSeekFrom - player.currentTime) < 0.02 && now - lastSeekAt < 400) return;
-    lastSeekFrom = player.currentTime;
-    lastSeekTo = t;
-    lastSeekAt = now;
-    player.currentTime = t;
-  };
-
-  const follow = (): void => {
-    window.clearTimeout(armTimer);
-    if (holdEnd) {
-      holdEnd = false;
-      player.pause();
-      return;
-    }
-    if (!previewOn || player.paused || !view) return;
-    const rs = rangesNow();
-    const jump = previewJump(player.currentTime, rs);
-    if (jump === "end") {
-      const last = rs[rs.length - 1];
-      if (last && player.currentTime > last[1] + 0.02) {
-        const back = Math.max(last[0], last[1] - 0.04);
-        if (Math.abs(player.currentTime - back) >= 0.03) {
-          holdEnd = true;
-          guardedSeek(back);
-          return;
-        }
-      }
-      player.pause();
-      return;
-    }
-    if (typeof jump === "number") {
-      guardedSeek(jump);
-      return;
-    }
-    const hit = rs.find(([a, b]) => player.currentTime >= a && player.currentTime < b);
-    if (!hit) return;
-    armTimer = window.setTimeout(follow, Math.max(16, (hit[1] - player.currentTime) * 1000));
-  };
-
   const refreshMarks = async (): Promise<void> => {
     try {
       const survey = await api<Survey>("/api/survey");
       const clipNow = survey.clips.find((c) => c.id === id);
-      const line = document.querySelector(".steps-line");
-      if (clipNow && line) line.innerHTML = stepChips(clipNow.steps);
+      // 状态点挂在 tab 上（tab 即导航，不再单独占一行重复列同一批步名）
+      for (const b of Array.from(document.querySelectorAll<HTMLElement>(".tabs .tab"))) {
+        const st = clipNow?.steps.find((s) => s.step === b.dataset.tab);
+        const dot = b.querySelector<HTMLElement>(".dot");
+        if (st && dot) dot.className = `dot ${st.status}`;
+      }
       const todo = document.querySelector(".todo");
-      if (todo) todo.outerHTML = renderTodo(survey);
+      if (todo) todo.outerHTML = renderTodo(survey, { kind: "clip", id });
     } catch (err) {
-      statusEl.textContent = err instanceof Error ? err.message : String(err);
+      setMsg(statusEl, err instanceof Error ? err.message : String(err), "err");
     }
   };
 
@@ -271,27 +240,60 @@ async function wireS03(
     const kept = view.sentences.filter((s) => s.keep).length;
     infoEl.textContent = `句流（留 ${kept} / 共 ${view.sentences.length} 句${view.ai ? `，AI 初稿 ${view.ai.model}` : ""}${view.orphans.length ? `，${view.orphans.length} 条决策已对不上句子` : ""}）`;
     listEl.innerHTML = view.sentences
-      .map((s, idx) => `<div class="sent${s.keep ? "" : " drop"}" data-idx="${idx}">
+      .map((s, idx) => `<div class="sent${s.keep ? "" : " drop"}" role="option" tabindex="${idx === 0 ? 0 : -1}" aria-selected="${s.keep}" data-idx="${idx}">
         <span class="tc num">${tc(s.start)}<br/>${tc(s.end)}</span>
         <span class="body"><span class="txt">${esc(s.text)}</span>
           ${s.reason ? `<span class="reason-line">${esc(s.reason)}</span>` : ""}</span>
         <span class="side">
           ${s.source === "human" ? `<span class="badge human">人</span>` : s.source === "ai" ? `<span class="badge">AI</span>` : ""}
-          <button class="minibtn toggle" data-idx="${idx}">${s.keep ? "留" : "删"}</button>
+          <button class="minibtn toggle" type="button" tabindex="-1" data-idx="${idx}" aria-pressed="${s.keep}" title="${s.keep ? "当前保留，点击改为删" : "当前已删，点击恢复保留"}">${s.keep ? "留" : "删"}</button>
         </span>
       </div>`)
       .join("");
     rowEls = Array.from(listEl.querySelectorAll<HTMLElement>(".sent"));
-    curIdx = -1;
-    listEl.querySelectorAll<HTMLElement>(".sent .txt, .sent .tc").forEach((el) => {
-      el.addEventListener("click", () => {
-        const row = el.closest(".sent") as HTMLElement;
-        const s = view!.sentences[Number(row.dataset.idx)]!;
-        player.currentTime = s.start + 0.02; // 点句跳转（b9）
-        // 点开已删的句子是为了看这一帧。成片预览开着时先停住，再按播放会跳到下一段保留。
-        if (previewOn && !s.keep) player.pause();
+    pb.reset();
+
+    const seekRow = (idx: number, pauseIfDropped: boolean): void => {
+      const s = view!.sentences[idx];
+      if (!s) return;
+      pb.seekTo(s.start + 0.02); // 点句跳转（b9）
+      // 点开已删的句子是为了看这一帧。成片预览开着时先停住，再按播放会跳到下一段保留。
+      if (pauseIfDropped && previewOn && !s.keep) player.pause();
+    };
+
+    // roving tabindex：整张表只占一个 Tab 位，↑↓ 在句间移动，Space 切留删
+    const focusRow = (idx: number): void => {
+      const row = rowEls[idx];
+      if (!row) return;
+      rowEls.forEach((el, i) => (el.tabIndex = i === idx ? 0 : -1));
+      row.focus({ preventScroll: true });
+      row.scrollIntoView({ block: "nearest" });
+    };
+
+    for (const row of rowEls) {
+      row.addEventListener("click", (e) => {
+        if ((e.target as HTMLElement).closest("button")) return;
+        const idx = Number(row.dataset.idx);
+        focusRow(idx);
+        seekRow(idx, true);
       });
-    });
+      row.addEventListener("keydown", (e) => {
+        const idx = Number(row.dataset.idx);
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          const next = Math.max(0, Math.min(rowEls.length - 1, idx + (e.key === "ArrowDown" ? 1 : -1)));
+          focusRow(next);
+          seekRow(next, false);
+        } else if (e.key === " ") {
+          e.preventDefault();
+          listEl.querySelector<HTMLButtonElement>(`.toggle[data-idx="${idx}"]`)?.click();
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          seekRow(idx, true);
+        }
+      });
+    }
+
     listEl.querySelectorAll<HTMLButtonElement>(".toggle").forEach((btn) => {
       btn.addEventListener("click", async (e) => {
         e.stopPropagation();
@@ -306,55 +308,41 @@ async function wireS03(
           await paintWave?.();
           // 覆盖层一落盘，s05 的指纹就变了。步骤条和待办是进页时画的，这里再拉一次总览，标脏立刻出现。
           await refreshMarks();
-          follow();
+          pb.follow();
         } catch (err) {
           btn.disabled = false;
-          statusEl.textContent = err instanceof Error ? err.message : String(err);
+          setMsg(statusEl, err instanceof Error ? err.message : String(err), "err");
         }
       });
     });
   };
 
-  // 播放联动：高亮当前句，并保持上下各两句在视口内（b9）。
-  // 成片预览开着时，播放头落到已删区间就跳到下一段保留（规则与 s05 的 filmRanges 相同）。
-  const highlight = (): void => {
-    if (!view || rowEls.length === 0) return;
-    const t = player.currentTime;
-    const idx = view.sentences.findIndex((s) => s.start <= t && t < s.end);
-    if (idx === curIdx) return;
-    curIdx = idx;
-    rowEls.forEach((el, i) => el.classList.toggle("cur", i === idx));
-    if (idx >= 0 && !player.paused) {
-      const anchor = rowEls[Math.max(0, idx - 2)]!;
-      listEl.scrollTo({ top: anchor.offsetTop, behavior: "smooth" });
-    }
-  };
-  player.addEventListener("timeupdate", () => {
-    follow();
-    highlight();
+  player.addEventListener("error", () => {
+    setMsg(statusEl, "源视频取不到——文件可能被移动或改名", "err");
   });
-  player.addEventListener("play", follow);
-  player.addEventListener("seeked", follow);
-  player.addEventListener("pause", () => window.clearTimeout(armTimer));
   document.getElementById("preview-cut")!.addEventListener("change", () => {
     previewOn = (document.getElementById("preview-cut") as HTMLInputElement).checked;
-    if (previewOn) follow();
-    else window.clearTimeout(armTimer);
+    if (previewOn) pb.follow();
   });
 
-  document.getElementById("run-build")!.addEventListener("click", async () => {
-    if (await runWithConfirm(statusEl, owner, "s03", null)) {
-      view = await api<S03View>(`/api/clips/${encodeURIComponent(id)}/s03`).catch(() => null);
-      renderList();
-      rerender();
-    }
+  const buildBtn = document.getElementById("run-build") as HTMLButtonElement;
+  buildBtn.addEventListener("click", async () => {
+    await withBusy(buildBtn, async () => {
+      if (await runWithConfirm(statusEl, owner, "s03", null)) {
+        view = await api<S03View>(`/api/clips/${encodeURIComponent(id)}/s03`).catch(() => null);
+        renderList();
+        rerender();
+      }
+    });
   });
   draftBtn.addEventListener("click", async () => {
-    if (await runWithConfirm(statusEl, owner, "s03", "draft")) {
-      view = await api<S03View>(`/api/clips/${encodeURIComponent(id)}/s03`).catch(() => null);
-      renderList();
-      rerender();
-    }
+    await withBusy(draftBtn, async () => {
+      if (await runWithConfirm(statusEl, owner, "s03", "draft")) {
+        view = await api<S03View>(`/api/clips/${encodeURIComponent(id)}/s03`).catch(() => null);
+        renderList();
+        rerender();
+      }
+    });
   });
 
   renderList();
@@ -380,7 +368,7 @@ async function wireS03(
         })),
         onSeek: (t) => {
           const abs = t + clip.start;
-          player.currentTime = abs;
+          pb.seekTo(abs);
           const dropped = view?.sentences.some((s) => !s.keep && s.start <= abs && abs < s.end) === true;
           if (previewOn && dropped) player.pause();
         },
@@ -394,8 +382,10 @@ async function wireS03(
       waveTitle.textContent = "波形气口（读取失败——s02 的人声轨取不到）";
     }
   } else {
+    // 不重复写「去跑 s02」：面板顶部的依赖提示已经带了入口，同一屏两个一模一样的链接
+    // 会让人以为是两种不同的缺口。这里只回答「为什么这块是空的」。
     waveTitle.textContent = "波形气口";
-    waveBox.innerHTML = `<div class="empty-hint">s02 未跑，没有波形可看——<a class="link" href="${esc(linkFor("s02"))}">去跑 s02</a>（不阻塞本页的删留）</div>`;
+    waveBox.innerHTML = `<div class="empty-hint">波形来自 s02 的人声轨，本步不依赖它——所以这里先空着</div>`;
     waveBox.hidden = false;
   }
 }

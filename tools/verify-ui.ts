@@ -1184,6 +1184,26 @@ try {
   check(`一步没跑过的链路只说一遍「未跑」（实测「${chipsTxt}」）`, (chipsTxt.match(/未跑/g) ?? []).length <= 1, true);
   check("并且明确说的是「本链路还没跑过」", chipsTxt.includes("本链路还没跑过"), true);
 
+  // W-05：读页与工作台页必须同宽。以前工作台页被旧值 900 卡住——要逐句删留、看波形的页面
+  // 反而更窄，而任务页的播放器长到 1038，越过 b10 的 900。判据量**计算后的盒子**，
+  // 不读样式表里写的数字（写了 900 却被别的规则覆盖时，断言仍然该红）。
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // ⚠️ 等的是**本页独有**的元素，不是 `.main`：`.main` 在上一页也存在，
+  // waitForSelector 会立刻命中旧 DOM，把上一页的宽度当成这一页的量（同 N-5 那次的坑）。
+  const boxOf = async (route: string, ready: string, sel: string): Promise<number> => {
+    await page.goto(`${base}/${route}`);
+    await page.waitForSelector(ready);
+    return page.$eval(sel, (e) => Math.round(e.getBoundingClientRect().width));
+  };
+  const mainJob = await boxOf("#/job/ui-j1", "#job-player", ".main");
+  const mainClip = await boxOf("#/clip/ui-c1/s03", "#player", ".main");
+  check(`任务页与片段页内容同宽（实测 ${mainJob} / ${mainClip}）`, mainJob, mainClip);
+
+  const vJob = await boxOf("#/job/ui-j1", "#job-player", "#job-player");
+  const vClip = await boxOf("#/clip/ui-c1/s03", "#player", "#player");
+  check(`两页播放器同宽（实测 ${vJob} / ${vClip}）`, vJob, vClip);
+  check(`播放器不超过 b10 的 900 上限（实测 ${vJob}）`, vJob <= 900 && vJob > 0, true);
+
   check("全程没有出现原生 alert/confirm/prompt", nativeDialogs, 0);
 
   // ---- 截图：布局塌陷、圆点隐形这类问题只有看图才发现 ----

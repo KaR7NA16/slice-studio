@@ -97,7 +97,7 @@ export async function viewJob(id: string, rerender: () => void): Promise<void> {
   app.innerHTML = `
     ${topbar(`<a class="iconbtn link" href="#/">${icon("back", 12)} 总览</a><a class="iconbtn link" href="#/settings">${icon("sliders", 12)} 设置</a>`)}
     ${renderTodo(survey, { kind: "job", id })}
-    <div class="main">
+    <div class="main ws">
       <div class="card">
         <div class="card-head">${icon("film")} <span class="job-name">${esc(jobLabel(job.title, job.video_path))}</span>
           <span class="num">${esc(job.id)}</span>${job.archived ? `<span class="badge">已归档</span>` : ""}

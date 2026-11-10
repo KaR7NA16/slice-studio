@@ -58,10 +58,13 @@ a.chip:hover { border-color: var(--border-input); background: var(--surface-2); 
 /* ---------- 主体 ---------- */
 
 .main {
-  max-width: 1080px; margin: 0 auto; padding: var(--pad-3);
+  max-width: var(--w-page); margin: 0 auto; padding: var(--pad-3);
   display: grid; gap: var(--pad-3); align-content: start;
 }
-.main.ws { max-width: 900px; }
+/* 工作台页（任务 / 片段）：容器正好容纳 b10 的 900 视频——900 + 卡片内边距 8×2 + 页面内边距 12×2。
+   不留「容器比影像宽」的余量：那样视频缩在中间、上下卡片却撑满，一页里出现两条竖线。
+   读页（首页 / 设置）仍用 --w-page。 */
+.main.ws { max-width: calc(var(--w-media) + 2 * var(--pad-2) + 2 * var(--pad-3)); }
 .section-title {
   display: flex; align-items: baseline; gap: var(--pad-2);
   font-size: var(--fs-head); font-weight: 500;
@@ -557,7 +560,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 /* ---------- 适配（900 / 640） ---------- */
 
 @media (max-width: 900px) {
-  .main, .main.ws { max-width: none; padding: var(--pad-2); gap: var(--pad-2); }
+  .main { max-width: none; padding: var(--pad-2); gap: var(--pad-2); }
   .topbar { padding: 0 var(--pad-3); }
   .todo { padding: 5px var(--pad-3); }
   .player { max-height: 36vh; }

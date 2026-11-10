@@ -57,18 +57,15 @@ export async function viewHome(rerender: () => void): Promise<void> {
     <div class="main">
       <div class="section-title">新建任务 <span class="meta">只登记路径，不复制文件</span></div>
       <div class="card">
-        <div class="form-card">
+        <div class="nj-form">
           <button class="btn primary" id="nj-pick">${icon("folder", 12)} 选择视频…</button>
-          <input class="text" id="nj-video" placeholder="或粘贴视频完整路径（mp4 / mov / mkv / webm / avi）" spellcheck="false" />
-        </div>
-        <div class="form-card">
+          <input class="text span-2" id="nj-video" placeholder="或粘贴视频完整路径（mp4 / mov / mkv / webm / avi）" spellcheck="false" />
           <button class="btn" id="nj-srt-pick">${icon("file", 12)} 选字幕…</button>
           <input class="text" id="nj-srt" placeholder="剪映导出的 .srt（可空，空则走本地转写）" spellcheck="false" />
+          <button class="btn primary" id="nj-go">${icon("plus", 12)} 建任务</button>
         </div>
         <div class="actions">
           <span class="msg" id="nj-msg" role="status" aria-live="polite">${survey.jobs.length ? "" : "还没有任务——先选择上面那个视频"}</span>
-          <span class="spacer"></span>
-          <button class="btn primary" id="nj-go">${icon("plus", 12)} 建任务</button>
         </div>
       </div>
       <div class="section-title">任务 <span class="meta">${activeJobs.length ? `${activeJobs.length} 个进行中` : ""}</span></div>

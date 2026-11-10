@@ -675,9 +675,56 @@ try {
   check("步骤行 32px（b10 的 28–32）", await page.evaluate(() => getComputedStyle(document.querySelector(".step")!).height), "32px");
   check("步骤行状态字 12px", await page.evaluate(() => getComputedStyle(document.querySelector(".step .state")!).fontSize), "12px");
 
+  // W-08：建任务表单原来三行控件——视频行、字幕行、「建任务」独占第三行右对齐，左下留一大片空白。
+  // 提交是「给完字幕之后」的动作，跟最后一行输入同行是表单惯常读法，不是新结构。
+  // 判据不量卡片高度（会被文案长短带跑），量「控件按 top 去重占几行」和「提交是否在最后一行」。
+  const njRows = await page.evaluate(() => {
+    const card = document.getElementById("nj-go")!.closest(".card") as HTMLElement;
+    const tops = Array.from(card.querySelectorAll<HTMLElement>("button, input, select")).map((e) => Math.round(e.getBoundingClientRect().top));
+    const rows: number[] = [];
+    for (const t of [...new Set(tops)].sort((a, b) => a - b)) if (!rows.some((m) => Math.abs(m - t) <= 2)) rows.push(t);
+    return { n: rows.length, tops: rows };
+  });
+  check(`新建任务卡的控件只占 ${njRows.n} 行（≤2；实测 top=${njRows.tops.join("/")}）`, njRows.n <= 2, true);
+  check(
+    "「建任务」与字幕输入同一行（提交跟着最后一行输入走，不再右对齐独占一行）",
+    await page.evaluate(() => {
+      const a = document.getElementById("nj-srt")!.getBoundingClientRect();
+      const b = document.getElementById("nj-go")!.getBoundingClientRect();
+      return Math.abs(a.top - b.top) <= 1;
+    }),
+    true,
+  );
+  // 两行若各是一个 flex 容器，按钮列宽不共享（「选择视频…」106 /「选字幕…」93），
+  // 第二行输入框会整体左移 13px。右边缘本来就不该齐——第二行右端要给「建任务」让位，
+  // 所以这里量的是「左边缘齐」+「整块表单的外框右边界齐」（第一行输入框 = 建任务按钮）。
+  const njAlign = await page.evaluate(() => {
+    const v = document.getElementById("nj-video")!.getBoundingClientRect();
+    const s = document.getElementById("nj-srt")!.getBoundingClientRect();
+    const g = document.getElementById("nj-go")!.getBoundingClientRect();
+    return {
+      lefts: [Math.round(v.left), Math.round(s.left)],
+      rights: [Math.round(v.right), Math.round(g.right)],
+    };
+  });
+  check(`两行输入框左边缘对齐（实测 ${njAlign.lefts.join(" / ")}）`, Math.abs(njAlign.lefts[0]! - njAlign.lefts[1]!) <= 1, true);
+  check(`表单外框右边界对齐（输入框 ${njAlign.rights[0]} / 建任务 ${njAlign.rights[1]}）`, Math.abs(njAlign.rights[0]! - njAlign.rights[1]!) <= 1, true);
+
   await page.goto(`${base}/#/job/ui-j1`);
   await page.waitForSelector("#job-sents .sent");
   check("句流最小行高 32px", await page.evaluate(() => getComputedStyle(document.querySelector("#job-sents .sent")!).minHeight), "32px");
+  // W-07：实际高度 34.5 = min-height 32 的下界 + padding 3×2 + border 1，内容 27.5 由时间码两行撑开。
+  // 两行是模板里的显式 <br/>（tc(s.start) / tc(s.end)）——逐句删留时要同时看见区间两端，
+  // 100px 列横排放不下两个 8 字符时间码。所以 34.5 是设计结果，把判据从 32 放宽到 32–36。
+  // 原来这条只量 min-height，等于把 CSS 复述一遍：撑到 40 也照样绿。
+  const sentH = await page.$eval("#job-sents .sent", (e) => Math.round(e.getBoundingClientRect().height * 10) / 10);
+  check(`句行实际高度落在 32–36（实测 ${sentH}）`, sentH >= 32 && sentH <= 36, true);
+  const tcShape = await page.evaluate(() => {
+    const el = document.querySelector("#job-sents .sent .tc")!;
+    const lh = parseFloat(getComputedStyle(el).lineHeight);
+    return { brs: el.querySelectorAll("br").length, lines: Math.round((el.getBoundingClientRect().height / lh) * 10) / 10 };
+  });
+  check(`时间码两行来自显式 <br>（×${tcShape.brs}，实高 ${tcShape.lines} 行）`, tcShape.brs === 1 && tcShape.lines > 1.8 && tcShape.lines < 2.2, true);
   check(
     "时间码 11px 等宽",
     await page.evaluate(() => {

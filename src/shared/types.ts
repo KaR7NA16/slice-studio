@@ -233,6 +233,10 @@ export interface S03View {
   sentences: MergedSentence[];
   orphans: string[]; // 已对不上句子的键（人工覆盖层 + AI 决策两侧都收；s00 重解析后可能出现），据实亮出
   ai: { model: string; at: string } | null;
+  // 句流是否构建过。**不能拿 sentences.length === 0 代替**：没人声的视频构建成功也是 0 句，
+  // 那是「已构建、没句子」，与「没跑过」是两件事。N-4：未构建此前用 404 表达，
+  // 前端 catch 一压就分不清「没跑 / 片段不存在 / 服务端出错」——真故障被伪装成正常空态。
+  built: boolean;
 }
 
 // ---- s04：配乐（b51a/b50c：**mood 值域 = 曲库动态注入**；规则优先，LLM 兜底） ----

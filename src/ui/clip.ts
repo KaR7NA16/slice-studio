@@ -202,7 +202,16 @@ async function wireS03(
   clip: { start: number; end: number },
 ): Promise<void> {
   const llm = await api<{ ok: boolean; model?: string; reason?: string }>("/api/llm");
-  let view: S03View | null = await api<S03View>(`/api/clips/${encodeURIComponent(id)}/s03`).catch(() => null);
+  const statusEl = document.getElementById("run-status")!;
+  // 不再 .catch(() => null)：把失败压成 null 等于让「片段不存在 / 服务端 5xx / 网络断」
+  // 全部伪装成「句流未构建」，用户于是去点重建——重建也失败、原因同样被吞（N-4）。
+  // 「没跑过」是正常态，服务端用 200 + built:false 明确回答，不靠吞错来表达。
+  let view: S03View | null = null;
+  try {
+    view = await api<S03View>(`/api/clips/${encodeURIComponent(id)}/s03`);
+  } catch (err) {
+    setMsg(statusEl, err instanceof Error ? err.message : String(err), "err");
+  }
   const draftBtn = document.getElementById("run-draft") as HTMLButtonElement;
   if (!llm.ok) {
     draftBtn.disabled = true;
@@ -215,12 +224,13 @@ async function wireS03(
   const player = document.getElementById("player") as HTMLVideoElement;
   const listEl = document.getElementById("s03-sents")!;
   const infoEl = document.getElementById("s03-info")!;
-  const statusEl = document.getElementById("run-status")!;
   let rowEls: HTMLElement[] = [];
   let previewOn = true;
   let paintWave: (() => Promise<void>) | null = null;
 
-  const rangesNow = (): [number, number][] => (view ? filmRanges(view.sentences, clip) : []);
+  // 只有真的构建过才有段可播。built 与 sentences 两件事分开问：没人声的视频构建成功也是 0 句，
+  // 那是「已构建、没句子」，播放该正常停住而不是被当成「没跑」。
+  const rangesNow = (): [number, number][] => (view?.built ? filmRanges(view.sentences, clip) : []);
 
   // 播放联动与任务页共用同一份实现（playback.ts）：跟随高亮、跳段、防抖 seek 都在那里
   const pb = mountPlayback({
@@ -236,6 +246,11 @@ async function wireS03(
     const el = document.getElementById("preview-len");
     if (!el) return;
     if (!view) {
+      // 请求本身失败（错误已在状态位）：这里若还说「还没构建」，就等于把故障说成正常空态（N-4）。
+      el.textContent = "取不到句流";
+      return;
+    }
+    if (!view.built) {
       el.textContent = "句流还没构建";
       return;
     }
@@ -266,6 +281,11 @@ async function wireS03(
   const renderList = (): void => {
     paintPreview();
     if (!view) {
+      infoEl.textContent = "句流（读取失败）";
+      listEl.innerHTML = `<div class="empty-hint">取不到句流数据——原因见上方状态提示</div>`;
+      return;
+    }
+    if (!view.built) {
       infoEl.textContent = "句流（未构建）";
       listEl.innerHTML = `<div class="empty-hint">句流未构建——点上方「重建句流」</div>`;
       return;
@@ -350,6 +370,17 @@ async function wireS03(
     });
   };
 
+  // 跑完（构建 / 初稿）后重新取视图。失败必须报出来：此前这里也 catch 成 null，
+  // 于是「跑成功但读回失败」会被渲染成「句流未构建」，真因看不见（N-4）。
+  const reloadView = async (): Promise<void> => {
+    try {
+      view = await api<S03View>(`/api/clips/${encodeURIComponent(id)}/s03`);
+    } catch (err) {
+      setMsg(statusEl, err instanceof Error ? err.message : String(err), "err");
+    }
+    renderList();
+  };
+
   player.addEventListener("error", () => {
     setMsg(statusEl, "源视频取不到——文件可能被移动或改名", "err");
   });
@@ -362,8 +393,7 @@ async function wireS03(
   buildBtn.addEventListener("click", async () => {
     await withBusy(buildBtn, async () => {
       if (await runWithConfirm(statusEl, owner, "s03", null)) {
-        view = await api<S03View>(`/api/clips/${encodeURIComponent(id)}/s03`).catch(() => null);
-        renderList();
+        await reloadView();
         rerender();
       }
     });
@@ -371,8 +401,7 @@ async function wireS03(
   draftBtn.addEventListener("click", async () => {
     await withBusy(draftBtn, async () => {
       if (await runWithConfirm(statusEl, owner, "s03", "draft")) {
-        view = await api<S03View>(`/api/clips/${encodeURIComponent(id)}/s03`).catch(() => null);
-        renderList();
+        await reloadView();
         rerender();
       }
     });

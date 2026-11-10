@@ -333,6 +333,17 @@ try {
   check("s02 tab 仍是 empty（没被 missing 连累）", chipDots.some((c) => c.cls === "dot empty"), true);
   check("状态只印一次（页内没有第二条 steps-line）", await page.$$eval(".steps-line", (els) => els.length), 0);
 
+  // N-4：没跑过 s03 的片段（ui-c2）要凭 built:false 渲染空态。
+  // 这一组的意义是把「空态」与「吞错」分开：只要前端还靠 catch(()=>null) 兜底，
+  // 状态位那条反而会「通过」——错误被吞了、界面看不出异常；能指出「有 4xx」的只剩 [D] 段。
+  // 等「句流区已画完」，而不是等「画对了」——若等待条件本身就要求结论正确，
+  // 被测行为一错就变成超时中断（0 failed 的中断，比红更危险：看起来像没失败）。
+  await page.waitForFunction(() => (document.getElementById("s03-info")?.textContent ?? "").length > 0, null, { timeout: 10000 });
+  check("未构建时句流标题标「未构建」", await page.textContent("#s03-info"), "句流（未构建）");
+  check("未构建时句流区给出空态说明", (await page.textContent("#s03-sents"))?.includes("句流未构建"), true);
+  check("未构建不等于不可操作：重建按钮仍可用", await page.$eval("#run-build", (b) => (b as HTMLButtonElement).disabled), false);
+  check("未构建不往状态位写错误（空态是 200 回答的，不是吞错换的）", await page.textContent("#run-status"), "");
+
   // ============ C. 设置页：草稿不丢 + 落盘 + 不回显 ============
   console.log("[C] 设置页：填 key → 触发重画 → 草稿必须还在 → 保存必须落盘");
   await page.goto(`${base}/#/settings`);
@@ -607,12 +618,11 @@ try {
   check("取消后没有产生新的 run（确认不是摆设）", runsAfter.length, runsBefore.length);
 
   // ============ D. 页面无 JS 报错 ============
-  // 已知噪音（不是缺陷，但要盯着）：clip 页无条件请求 s03 合并视图，片段没跑过 s03 就 404，
-  // 前端已 catch 降级为「还没跑」。语义上「未跑」不该用 404 表达，属既有设计，已登记缺口清单。
-  const KNOWN_NOISE = [/^404 .*\/api\/clips\/[^/]+\/s03$/];
-  const unexpected = bad.filter((b) => !KNOWN_NOISE.some((re) => re.test(b)));
+  // 这里**不再有白名单**。此前的 KNOWN_NOISE 是给「未跑 s03 就 404」开的洞——白名单一旦存在，
+  // 登记进去的那类响应就再没人看，新增同类问题会静默通过。N-4 把「未构建」改成 200 + built:false，
+  // 洞已从源头闭合，所以这里改回最硬的口径：任何 4xx / 5xx 都算非预期。
   console.log(`  （非 2xx 响应：${JSON.stringify(bad)}）`);
-  check("无非预期错误响应（5xx / 未登记的 4xx）", unexpected, []);
+  check("无非预期错误响应（任何 4xx / 5xx 都算）", bad, []);
   // console 里的 "Failed to load resource" 是上面那些响应的回声，已由 bad 覆盖；
   // 这里只看真正的 JS 异常与代码主动打的 console.error。
   const jsErrs = errs.filter((e) => !e.startsWith("console: Failed to load resource"));

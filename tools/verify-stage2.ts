@@ -201,6 +201,9 @@ async function main(): Promise<void> {
   const r2 = await runAndWait(`clips/${clipId}`, "s03", null);
   check("s03 构建成功", r2.status === "done", r2.message);
   let view = await api<S03View>(`/api/clips/${clipId}/s03`);
+  // N-4：未构建改成 200 + built:false，所以「跑成功了却没有句流」不再以异常形式暴露，
+  // 必须显式问 built——否则下一步取 sentences[0] 会拿到 undefined，报出来的错离病根很远。
+  check("s03 视图自报已构建", view.built === true, `built=${String(view.built)}`);
   check("片段句流 5 句（区间交叠）", view.sentences.length === 5, String(view.sentences.length));
   check("默认全留", view.sentences.every((s) => s.keep && s.source === "default"));
 

@@ -149,11 +149,14 @@ async function s03View(res: ServerResponse, clipId: string): Promise<void> {
   const clip = await readJson<ClipFile>(path.join(dir, "clip.json"));
   if (!clip) return sendErr(res, 404, `片段不存在：${clipId}`);
   const cur = await readJson<SentencesFile>(path.join(dir, "s03", "sentences.json"));
-  if (!cur) return sendErr(res, 404, "句流未构建：先跑一次构建");
+  // 「没跑过」不是「不存在」：片段在，只是句流还没构建。用 404 表达会让前端无法区分
+  // 「没跑 / 片段不存在 / 服务端出错」——catch 一压全变成「句流未构建」，真故障被伪装成
+  // 正常空态（N-4）。所以回 200 + built:false，空态由前端据 built 渲染，错误走错误出口。
+  if (!cur) return sendJson(res, { clip, sentences: [], orphans: [], ai: null, built: false } satisfies S03View);
   const ai = await readJson<AiDraftFile>(path.join(dir, "s03", "ai.json"));
   const overlay = (await readJson<OverlayFile>(path.join(dir, "s03", "overlay.json"))) ?? EMPTY_OVERLAY;
   const { sentences, orphans } = mergeDecisions(cur.sentences, ai, overlay);
-  const view: S03View = { clip, sentences, orphans, ai: ai ? { model: ai.model, at: ai.at } : null };
+  const view: S03View = { clip, sentences, orphans, ai: ai ? { model: ai.model, at: ai.at } : null, built: true };
   sendJson(res, view);
 }
 

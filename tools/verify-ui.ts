@@ -876,6 +876,49 @@ try {
   check("失败后按钮恢复可点（不是永久 busy）", await page.$eval("#run-s00", (b) => (b as HTMLButtonElement).disabled === false), true);
   await page.unroute("**/api/run");
 
+  // 停顿里的高亮：真实字幕之间普遍有 0.3–1 秒空隙，暂停停在那里不能「一句都不高亮」。
+  // 以前 findIndex 落空就把整列 .cur 清掉，用户等于失去了「播到哪」的唯一线索。
+  const gap = await page.evaluate(async () => {
+    const v = document.querySelector("#job-player") as HTMLVideoElement;
+    const cur = () =>
+      Array.from(document.querySelectorAll<HTMLElement>("#job-sents .sent.cur")).map((e) => e.dataset.idx);
+    v.pause();
+    const seek = (t: number) =>
+      new Promise<void>((res) => {
+        v.addEventListener("seeked", () => res(), { once: true });
+        v.currentTime = t;
+      });
+    await seek(3.65); // 第 3 句到 3.6 结束、第 4 句从 3.7 开始：这里正落在空隙里
+    v.dispatchEvent(new Event("timeupdate"));
+    const inGap = cur();
+    await seek(5.5); // 末句 4.8 之后，没有下句可接
+    v.dispatchEvent(new Event("timeupdate"));
+    const past = cur();
+    return { inGap, past };
+  });
+  check(`停在第 3、4 句的空隙里仍指着第 3 句（实测 ${JSON.stringify(gap.inGap)}）`, gap.inGap, ["2"]);
+  check("末句之后不再滞留高亮（片尾没有台词就不该指着末句）", gap.past.length, 0);
+
+  // 内部合约编号不许漏到界面上——用户看到「（b29）」只会以为界面坏了。
+  // 扫的是渲染后的 textContent（含 hidden 面板），不是源码，所以换个写法再漏出来也会被抓到。
+  const leaks: string[] = [];
+  const leakRoutes: [string, string][] = [
+    ["#/", ".step"],
+    ["#/job/ui-j1", "#job-sents"],
+    ["#/clip/ui-c1/s03", ".tabs"],
+    ["#/clip/ui-c1/s05", ".tabs"],
+    ["#/settings", ".main"],
+  ];
+  for (const [route, sel] of leakRoutes) {
+    await page.goto(`${base}/${route}`);
+    await page.waitForSelector(sel);
+    const hit = await page.evaluate(() =>
+      ((document.body.textContent ?? "").match(/[（(]b\d{1,2}[^）)]{0,10}/g) ?? []).slice(0, 3),
+    );
+    if (hit.length) leaks.push(`${route} → ${hit.join(" / ")}`);
+  }
+  check("界面文案里没有内部合约编号（bNN）", leaks, []);
+
   check("全程没有出现原生 alert/confirm/prompt", nativeDialogs, 0);
 
   // ---- 截图：布局塌陷、圆点隐形这类问题只有看图才发现 ----

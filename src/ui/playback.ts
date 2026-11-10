@@ -14,6 +14,24 @@ export interface PlaybackCtl {
   dispose: () => void;
 }
 
+/**
+ * 当前时刻对应哪一句。
+ *
+ * 精确命中优先；落在两句之间的停顿里时，退回「刚过去、且后面还有句子」的那一句。
+ * 真实字幕之间普遍有 0.3–1 秒空隙，暂停恰好停在那里时，宁可继续指着上一句，
+ * 也不要整列清空——「一句都不高亮」等于用户失去了自己播到哪里的唯一线索。
+ * 字幕的阅读习惯本来也是上一句留到下句出现。
+ *
+ * 末句之后再没有下句可接，才真正清空（片子尾巴上没有台词，硬指着末句是撒谎）。
+ */
+function locate(sents: readonly CutSentence[], t: number): number {
+  const exact = sents.findIndex((s) => s.start <= t && t < s.end);
+  if (exact >= 0) return exact;
+  let prev = -1;
+  for (let i = 0; i < sents.length; i++) if (sents[i]!.start <= t) prev = i;
+  return prev >= 0 && prev < sents.length - 1 ? prev : -1;
+}
+
 export function mountPlayback(opts: {
   player: HTMLVideoElement;
   /** 现算：覆盖层改判后句子会变，不能缓存 */
@@ -85,9 +103,11 @@ export function mountPlayback(opts: {
     const rows = opts.rows();
     const sents = opts.sentences();
     if (rows.length === 0 || sents.length === 0) return;
-    const t = player.currentTime;
-    const idx = sents.findIndex((s) => s.start <= t && t < s.end);
-    if (idx === curIdx) return;
+    const idx = locate(sents, player.currentTime);
+    // 下相同只是必要条件：整列被重画过（片段页改留删会重建 DOM）时类名已经丢了，
+    // 只比下标就会提前 return，高亮再也回不来，而 mem 里还记着「当前是第几句」。
+    const painted = rows.every((el, i) => el.classList.contains("cur") === (i === idx));
+    if (idx === curIdx && painted) return;
     curIdx = idx;
     rows.forEach((el, i) => el.classList.toggle("cur", i === idx));
     const list = opts.list?.() ?? null;

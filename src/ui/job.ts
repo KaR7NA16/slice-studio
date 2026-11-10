@@ -136,7 +136,7 @@ export async function viewJob(id: string, rerender: () => void): Promise<void> {
           <span class="msg" id="run-status"></span>
         </div>
         ${depHint(s00, byId, linkFor)}
-        <div class="hint block">有 .srt 就直接解析；没有则走本地转写（b2/b14/b41/b42：SRT 优先、ASR 兜底）。重跑字幕后句子可能变少，选区会自动收回。</div>
+        <div class="hint block">有 .srt 就直接解析；没有则用本地转写（SRT 优先，本地识别兜底）。重跑字幕后句子可能变少，选区会自动收回。</div>
       </div>
 
       <div class="section-title">AI 抽卡 <span class="meta">每次抽卡另存一版，可切回</span></div>

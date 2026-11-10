@@ -88,7 +88,7 @@ export async function viewClip(id: string, tab: string, rerender: () => void): P
             <span class="msg" id="run-status"></span>
           </div>
           ${depHint(s03, byId, linkFor)}
-          <div class="hint block">人工改判写覆盖层（b29）——重跑构建或重抽 AI 都不会丢。</div>
+          <div class="hint block">人工改判记在覆盖层里——重跑构建、重抽 AI 都不会把它冲掉。</div>
         </div>
         <div class="card player-card">
           <video class="player" id="player" controls preload="metadata" src="/api/media/job/${encodeURIComponent(clip.job_id)}/video"></video>
@@ -113,7 +113,7 @@ export async function viewClip(id: string, tab: string, rerender: () => void): P
             <span class="msg" id="s05-status"></span>
           </div>
           ${depHint(s05, byId, linkFor)}
-          <div class="hint block">成片与素材包**两个出口并列**（b24）——只出一个不算完成。</div>
+          <div class="hint block">成片与素材包是两个并列的出口——只出一个不算完成。</div>
         </div>
         <div class="section-title">成片</div>
         <div class="card">

@@ -27,6 +27,11 @@ export async function s04Panel(
     api<{ ok: boolean; reason?: string }>("/api/llm"),
   ]);
   const runnable = canRun(st, byId);
+  // 依赖没就绪时，这一整块是死路：只有「跑一次」是灰的，其余照旧可点、曲库还占掉半屏，
+  // 空状态写着「点上方跑一次」——指向一个点不动的按钮。所以拦断要显式化：
+  //   ① 结论进 .blocked-box（depHint 已改），② 空状态不再劝你去点禁用按钮，
+  //   ③ 曲库收进折叠区（试听与预选仍可用，b34 不破，但不再冒充本步可用）。
+  const blocked = !runnable;
   // 没选风格就得问模型。模型没配时不要让人点出一次失败，选定风格后规则路不需要模型。
   const needsLlm = !v.bgm_mood;
   const canStart = runnable && (!needsLlm || llm.ok);
@@ -39,7 +44,9 @@ export async function s04Panel(
         ${v.pick ? `<button class="minibtn" id="bgm-clear">清除人工换曲</button>` : ""}
       </div>
       ${v.bgm?.reason ? `<div class="hint block">理由：${esc(v.bgm.reason)}</div>` : ""}`
-    : `<div class="empty-hint">还没有配乐产物——点上方「跑一次」</div>`;
+    : blocked
+      ? `<div class="empty-hint">还没有配乐产物——上游跑完才会出现。</div>`
+      : `<div class="empty-hint">还没有配乐产物——点上方「跑一次」</div>`;
 
   const groups = v.groups
     .map((g) => {
@@ -61,6 +68,18 @@ export async function s04Panel(
     })
     .join("");
 
+  // 曲库两种呈现：能跑 → 标题 + 卡片（当主角）；不能跑 → 折叠成一行（当配角）。
+  // 曲目一条不少、照样能试听，只是不再把半屏让给「暂时用不上」的东西。
+  const libInner = `<div class="form-card"><audio id="bgm-audio" controls preload="none"></audio></div>
+      <div class="tracks">${groups || `<div class="empty-hint">曲库里没有 bgm——回总览页选素材目录，重新入库</div>`}</div>`;
+  const libBlock = blocked
+    ? `<details class="fold" id="bgm-lib">
+        <summary>${icon("music")} 曲库<span class="meta">${v.total} 首 · 展开可试听或预选</span></summary>
+        ${libInner}
+      </details>`
+    : `<div class="section-title">曲库 <span class="meta">${v.total} 首，全部可试听</span></div>
+      <div class="card">${libInner}</div>`;
+
   host.innerHTML = `
     <div class="card ws-card">
       <div class="ws-head">${icon("music")} 配乐 ${automationRow(auto, "s04")}</div>
@@ -80,11 +99,7 @@ export async function s04Panel(
     </div>
     <div class="section-title">当前生效</div>
     <div class="card">${effective}</div>
-    <div class="section-title">曲库 <span class="meta">${v.total} 首，全部可试听</span></div>
-    <div class="card">
-      <div class="form-card"><audio id="bgm-audio" controls preload="none"></audio></div>
-      <div class="tracks">${groups || `<div class="empty-hint">曲库里没有 bgm——回总览页选素材目录，重新入库</div>`}</div>
-    </div>`;
+    ${libBlock}`;
 
   const s04Status = document.getElementById("s04-status")!;
   if (needsLlm && !llm.ok) {

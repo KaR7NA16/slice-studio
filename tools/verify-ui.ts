@@ -697,27 +697,108 @@ try {
   });
   check(`控件边界对卡片对比度 ≥3（实测 ${borderRatio}）`, borderRatio >= 3, true);
 
-  // 当前句与已选区间必须是两种视觉，不能只靠 1.14 的色差
-  // 用克隆行比对：真实行上可能已经带着 .cur（播放头落在这一句），直接加类会把两种状态叠在一起
-  const twoMarks = await page.evaluate(() => {
-    const host = document.querySelector("#job-sents")!;
-    const src = document.querySelector("#job-sents .sent")!;
-    const mk = (cls: string): HTMLElement => {
-      const el = src.cloneNode(true) as HTMLElement;
-      el.className = `sent ${cls}`;
-      host.appendChild(el);
-      return el;
-    };
-    const bg = (el: HTMLElement) => getComputedStyle(el).backgroundColor;
-    const a = mk("in-sel");
-    const b = mk("cur");
-    const out = { same: bg(a) === bg(b), hasBar: /inset/.test(getComputedStyle(b).boxShadow), sel: bg(a), cur: bg(b) };
-    a.remove();
-    b.remove();
-    return out;
-  });
-  check(`已选（${twoMarks.sel}）与当前句（${twoMarks.cur}）不是同一个底色`, twoMarks.same, false);
-  check("当前句带左侧 2px 条（不单靠底色）", twoMarks.hasBar, true);
+  // 当前句与已选区间必须是两种视觉，且底色差要能量出来。
+  // 上一版这里踩了坑：拿两个不同元素分别加类比 backgroundColor 字符串，得出「不是同一个底色」
+  // 就记为通过——实测叠加在同一行上只有 1.07:1，肉眼等于没有。句子行自身没有底色，
+  // 计算值还可能是 color(srgb … / .22)，所以必须合成到真正画出来的卡片底上再比。
+  const markMetric = (): Promise<{
+    ratio: number;
+    barPx: number;
+    tc: string;
+    normalTc: string;
+    tcVsRow: number;
+    bandKept: boolean;
+    bandBarPx: number;
+    bandTcDiffers: boolean;
+  }> =>
+    page.evaluate(() => {
+      type RGBA = { r: number; g: number; b: number; a: number };
+      const parse = (c: string): RGBA => {
+        const m = (c.match(/[\d.]+/g) ?? []).map(Number);
+        const v = /^\s*color\(/.test(c) ? [m[0]! * 255, m[1]! * 255, m[2]! * 255, m[3]] : m;
+        return { r: v[0] ?? 0, g: v[1] ?? 0, b: v[2] ?? 0, a: v[3] ?? 1 };
+      };
+      const over = (fg: RGBA, bg: RGBA): RGBA => ({
+        r: fg.r * fg.a + bg.r * (1 - fg.a),
+        g: fg.g * fg.a + bg.g * (1 - fg.a),
+        b: fg.b * fg.a + bg.b * (1 - fg.a),
+        a: 1,
+      });
+      const lum = ({ r, g, b }: RGBA): number => {
+        const f = (v: number): number => {
+          const x = v / 255;
+          return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+      };
+      const ratio = (a: RGBA, b: RGBA): number => {
+        const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m);
+        return Math.round(((x! + 0.05) / (y! + 0.05)) * 1000) / 1000;
+      };
+      // 最近的不透明祖先 = 卡片底；一路合成上去才是眼睛看到的颜色
+      const painted = (el: Element): RGBA => {
+        const stack: RGBA[] = [];
+        for (let n: Element | null = el; n; n = n.parentElement) {
+          const c = parse(getComputedStyle(n).backgroundColor);
+          if (c.a > 0) stack.push(c);
+          if (c.a === 1) break;
+        }
+        let base: RGBA = { r: 255, g: 255, b: 255, a: 1 };
+        for (let i = stack.length - 1; i >= 0; i--) base = over(stack[i]!, base);
+        return base;
+      };
+
+      const rows = Array.from(document.querySelectorAll<HTMLElement>("#job-sents .sent"));
+      const row = rows[1]!;
+      const base = painted(row);
+      const saved = row.className;
+      const paint = (cls: string): RGBA => {
+        row.className = `sent ${cls}`;
+        return over(parse(getComputedStyle(row).backgroundColor), base);
+      };
+      const sel = paint("in-sel");
+      const cur = paint("cur");
+      // 只取当前句：条宽 + 时间码色 + 文字对底色的比
+      const shadow = getComputedStyle(row).boxShadow;
+      const tcCur = getComputedStyle(row.querySelector(".tc")!).color;
+      const tcOver = over(parse(getComputedStyle(row).backgroundColor), base);
+      const curOnly = { shadow, tcCur, tcOver };
+      // 再取「既是当前句又在选区里」——这才是用户真正会遇到的叠加态
+      const both = paint("cur in-sel");
+      const bandBarPx = Number(/([\d.]+)px/.exec(getComputedStyle(row).boxShadow)?.[1] ?? 0);
+      const bandTc = getComputedStyle(row.querySelector(".tc")!).color;
+      row.className = saved;
+      const normalTc = getComputedStyle(row.querySelector(".tc")!).color;
+      return {
+        ratio: ratio(cur, sel),
+        barPx: Number(/([\d.]+)px/.exec(curOnly.shadow)?.[1] ?? 0),
+        tc: curOnly.tcCur,
+        normalTc,
+        tcVsRow: ratio(parse(curOnly.tcCur), curOnly.tcOver),
+        // 选区是一段连续事实：播放头落在里面也不能在色带上咬出缺口
+        bandKept: ratio(both, sel) === 1,
+        bandBarPx,
+        bandTcDiffers: bandTc !== normalTc,
+      };
+    });
+
+  const lightMarks = await markMetric();
+  check(`已选与当前句的底色差 ≥1.3（浅色实测 ${lightMarks.ratio}）`, lightMarks.ratio >= 1.3, true);
+  check(`当前句左条 3px（实测 ${lightMarks.barPx}px）`, lightMarks.barPx, 3);
+  check("当前句时间码换成强调色（不是和普通行一样）", lightMarks.tc !== lightMarks.normalTc, true);
+  check(`时间码对当前句底色 ≥4.5（实测 ${lightMarks.tcVsRow}）`, lightMarks.tcVsRow >= 4.5, true);
+  check("当前句落在选区里时仍保留选区底色（范围不被打断）", lightMarks.bandKept, true);
+  check(`叠加态仍有 3px 左条（实测 ${lightMarks.bandBarPx}px）`, lightMarks.bandBarPx, 3);
+  check("叠加态时间码仍是强调色（在选区里也看得出播到哪句）", lightMarks.bandTcDiffers, true);
+  // 暗色下色板被压缩，底色差是辅助，左条与时间码才是主通道——两条都要成立
+  await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
+  const darkMarks = await markMetric();
+  check(`暗色下已选与当前句底色差 ≥1.3（实测 ${darkMarks.ratio}）`, darkMarks.ratio >= 1.3, true);
+  check(`暗色下左条仍 3px（实测 ${darkMarks.barPx}px）`, darkMarks.barPx, 3);
+  check(`暗色下时间码对行底 ≥4.5（实测 ${darkMarks.tcVsRow}）`, darkMarks.tcVsRow >= 4.5, true);
+  check("暗色下叠加态仍保留选区底色", darkMarks.bandKept, true);
+  check(`暗色下叠加态仍有 3px 左条（实测 ${darkMarks.bandBarPx}px）`, darkMarks.bandBarPx, 3);
+  await page.evaluate(() => document.documentElement.removeAttribute("data-theme"));
 
   // 键盘焦点可见
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
@@ -796,6 +877,42 @@ try {
   await page.waitForSelector("#panel-s04 .ws-head");
   check("s04 的 ws-head 在 .card 里", await page.evaluate(() => !!document.querySelector("#panel-s04 .ws-head")?.closest(".card")), true);
   check("tab 高 28px（b10 的 28–32 下限）", await page.evaluate(() => getComputedStyle(document.querySelector(".tabs .tab")!).height), "28px");
+
+  // 依赖没就绪时，整块不能再装成「能用」：结论要显式、入口要可点、曲库不许占半屏，
+  // 空状态更不许劝用户去点一个被禁用的按钮（ui-c2 的 s03 产物缺失 → s04 强依赖未就绪）
+  await page.goto(`${base}/#/clip/ui-c2/s04`);
+  await page.waitForSelector("#panel-s04 .blocked-box");
+  check(
+    "阻断说明先给结论（「现在跑不了：上游没就绪」）",
+    await page.evaluate(() => /现在跑不了/.test(document.querySelector("#panel-s04 .blocked-box .blocked-head")?.textContent ?? "")),
+    true,
+  );
+  check(
+    "阻断说明里带「去跑 s03」入口且指向本片段的 s03",
+    await page.evaluate(() => {
+      const a = document.querySelector<HTMLAnchorElement>("#panel-s04 .blocked-box a");
+      return `${a?.textContent?.trim()}|${a?.getAttribute("href")}`;
+    }),
+    "去跑 s03|#/clip/ui-c2/s03",
+  );
+  check(
+    "曲库收进折叠区（默认收起，不再占掉半屏）",
+    await page.evaluate(() => {
+      const d = document.querySelector<HTMLDetailsElement>("#panel-s04 details#bgm-lib");
+      return d ? !d.open && /曲库/.test(d.querySelector("summary")?.textContent ?? "") : false;
+    }),
+    true,
+  );
+  check(
+    "空状态不再劝你点被禁用的按钮",
+    await page.evaluate(() => !/点上方/.test(document.querySelector("#panel-s04 .empty-hint")?.textContent ?? "")),
+    true,
+  );
+  check(
+    "跑一次在阻断态下是禁用的",
+    await page.evaluate(() => document.querySelector<HTMLButtonElement>("#run-s04")?.disabled),
+    true,
+  );
 
   // ============ K. 入口校验 / 任务页审片 / 句行键盘模型 / 导航中文优先 ============
   // 这四条都是「取舍对、但只在片段页兑现」的地方：b9 的联动此前只做了片段页一半，

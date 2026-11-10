@@ -33,8 +33,11 @@
   --bg-danger: #f8e8e6;
   --text-danger: #8d342c;
 
-  --bg-selected: color-mix(in srgb, var(--accent) 8%, transparent);
-  --bg-current: #f1ece0; /* 当前播放句；另配 2px 左条，不靠色差单独表意 */
+  /* 两种「这行有含义」必须能分开看：
+     已选 = 强调色淡染（往 accent 方向压），当前句 = 暖中性底 + 3px 左条 + 强调色时间码。
+     8% 只做出 1.07:1，肉眼等于没有；22% 在明暗两态都到 1.4:1 以上。 */
+  --bg-selected: color-mix(in srgb, var(--accent) 22%, transparent);
+  --bg-current: #f1ece0;
   --media-bg: #0b0b0a; /* 视频底，明暗恒定：审片时周围不能发光 */
   --scrim: rgba(20, 20, 19, 0.42);
   --bar-surface: color-mix(in srgb, var(--surface-0) 82%, transparent);

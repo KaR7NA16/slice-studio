@@ -15,19 +15,27 @@ import { toast } from "./toast.ts";
 //   禁用它是错的：s03 在没跑 s02 时照样能构建句流，只是没有波形可看。
 // linkFor 由各视图给出（片段页是切换 tab 的哈希，任务页是锚点）。
 export function depHint(st: StepState, byId: Map<string, StepState>, linkFor: (step: string) => string): string {
-  const rows: string[] = [];
+  const hard: string[] = [];
   for (const d of st.deps) {
     const ds = byId.get(d);
     if (ds && (ds.status === "ready" || ds.status === "suspect")) continue;
-    rows.push(`<span class="hint block">强依赖「${esc(ds?.title ?? d)}」未就绪（${STATE_TEXT[ds?.status ?? "empty"]}）——
-      <a class="link" href="${esc(linkFor(d))}">去跑 ${esc(d)}</a>，否则这一步跑不起来</span>`);
+    // 「未就绪」是状态；「这一块现在跑不了」才是用户要的结论——所以先给结论，再列原因。
+    hard.push(`<li>「${esc(ds?.title ?? d)}」${esc(STATE_TEXT[ds?.status ?? "empty"])} ——
+      <a class="link" href="${esc(linkFor(d))}">去跑 ${esc(d)}</a></li>`);
   }
+  const lazy: string[] = [];
   for (const l of st.lazy ?? []) {
     if (l.available) continue;
-    rows.push(`<span class="hint block">${esc(l.title)} 未跑——<a class="link" href="${esc(linkFor(l.step))}">去跑 ${esc(l.step)}</a>
+    lazy.push(`<span class="hint block">${esc(l.title)} 未跑——<a class="link" href="${esc(linkFor(l.step))}">去跑 ${esc(l.step)}</a>
       （不阻塞本步，只是少了它带来的东西）</span>`);
   }
-  return rows.join("");
+  const box = hard.length
+    ? `<div class="blocked-box">
+        <div class="blocked-head">${icon("warn", 12)}现在跑不了：上游没就绪</div>
+        <ul class="blocked-list">${hard.join("")}</ul>
+      </div>`
+    : "";
+  return box + lazy.join("");
 }
 
 // 该步能不能跑：强依赖全部就绪（ready 或 suspect）。

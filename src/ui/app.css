@@ -293,10 +293,13 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .sent .reason-line { color: var(--text-secondary); font-size: var(--fs-sm); }
 .sent.drop .txt { color: var(--text-muted); text-decoration: line-through; }
 .sent.drop .tc { color: var(--text-muted); }
-/* 已选区间 = 底色；当前播放句 = 底色 + 2px 左条。两种含义不靠色差单独表意 */
+/* 已选区间 = 强调色淡染；当前播放句 = 暖中性底 + 3px 左条 + 强调色时间码。
+   底色差在暗色下最多做到 1.5:1，单靠它分不开「播到这里」和「选中这里」，所以当前句必须另有通道。
+   当前句落在已选区里时**保留选区底色**——选中范围是一段连续事实，不能被播放头咬出一个缺口。 */
 .sent.in-sel { background: var(--bg-selected); }
-.sent.cur { background: var(--bg-current); box-shadow: inset 2px 0 0 var(--accent); }
-.sent.in-sel.cur { background: var(--bg-current); }
+.sent.cur { background: var(--bg-current); box-shadow: inset 3px 0 0 var(--accent); }
+.sent.in-sel.cur { background: var(--bg-selected); }
+.sent.cur .tc { color: var(--accent); }
 .pick-btns { display: flex; gap: 4px; flex: none; }
 .pick-btns .minibtn { min-width: 26px; padding: 0 6px; }
 .pick-btns .minibtn.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
@@ -418,6 +421,24 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .warn-box svg { vertical-align: -2px; margin-right: 4px; color: var(--text-warning); }
 /* 卡片内嵌的警示条：自带左右缩进，不靠行内 style 撑版面 */
 .warn-box.inset { margin: 0 var(--pad-3) var(--pad-2); }
+
+/* 依赖没就绪时「为什么这里跑不了」：比 .hint 重一档。
+   这条信息决定用户下一步去哪，不能是 12px 灰字里的半句话。 */
+.blocked-box {
+  display: grid; gap: 3px;
+  margin: 0 var(--pad-3) var(--pad-2);
+  padding: var(--pad-2) var(--pad-3);
+  border-left: 3px solid var(--text-warning);
+  border-radius: var(--radius-sm);
+  background: var(--bg-warning);
+  font-size: var(--fs-sm);
+}
+.blocked-head { display: flex; align-items: center; gap: 4px; color: var(--text-warning); font-weight: 500; }
+.blocked-list { margin: 0; padding-left: 14px; list-style: disc; color: var(--text-secondary); }
+.blocked-list a {
+  color: var(--text-primary); text-decoration: underline;
+  text-underline-offset: 2px; text-decoration-color: var(--border-input);
+}
 
 /* ---------- 文件选择器 ---------- */
 

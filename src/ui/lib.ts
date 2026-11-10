@@ -212,6 +212,11 @@ export function stepRow(st: StepState): string {
 }
 
 export function stepChips(steps: StepState[]): string {
+  // 整条链路一次都没跑过时，逐步铺三个「未跑」读起来像三条各自独立的问题，
+  // 实际是一件事。收成一句；各步的确切状态在上方的步列表里逐行写着，不丢信息。
+  if (steps.length > 1 && steps.every((st) => st.status === "empty")) {
+    return `<span class="chip"><span class="dot empty"></span>本链路还没跑过</span>`;
+  }
   return steps
     .map((st) => `<span class="chip" title="${esc(st.reason ?? STATE_TEXT[st.status])}">
       <span class="dot ${st.status}"></span>${esc(st.step)} ${esc(st.title)}·${STATE_TEXT[st.status]}</span>`)

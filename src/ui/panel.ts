@@ -26,7 +26,10 @@ export function depHint(st: StepState, byId: Map<string, StepState>, linkFor: (s
   const lazy: string[] = [];
   for (const l of st.lazy ?? []) {
     if (l.available) continue;
-    lazy.push(`<span class="hint block">${esc(l.title)} 未跑——<a class="link" href="${esc(linkFor(l.step))}">去跑 ${esc(l.step)}</a>
+    // 这里**不能**用状态词（未跑 / 丢失 / 就绪）：lazy 的判据是「产物在不在磁盘上能不能用」，
+    // 与 status（新鲜不新鲜）刻意不同源（types.ts 的 LazyDep）。拿状态词去说一件非状态的事，
+    // 就会出现「待办条说『丢失』、这里说『未跑』」——同一件事两个词，读的人不知道该信哪个。
+    lazy.push(`<span class="hint block">${esc(l.title)}还没有可用产物——<a class="link" href="${esc(linkFor(l.step))}">去跑 ${esc(l.step)}</a>
       （不阻塞本步，只是少了它带来的东西）</span>`);
   }
   const box = hard.length

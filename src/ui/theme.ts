@@ -6,6 +6,7 @@
 //
 // 首屏不闪：src/ui/index.html 的 <head> 里有一小段同样的解析逻辑，在样式生效前就跑。
 import { icon } from "./icons.ts";
+import { repaintWaves } from "./wave.ts";
 
 export type ThemeChoice = "auto" | "light" | "dark";
 type Resolved = "light" | "dark";
@@ -28,8 +29,15 @@ function resolve(c: ThemeChoice): Resolved {
   return media.matches ? "dark" : "light";
 }
 
+// 写 data-theme 并重画像素产物。两处都要经过它，否则「跟随系统时系统切了」那条路会漏重画。
+function paint(r: Resolved): void {
+  document.documentElement.dataset.theme = r;
+  // 画进像素的东西不会自己跟着令牌变（波形线、以后任何 canvas）。样式换完立刻让它重画一次。
+  repaintWaves();
+}
+
 export function applyChoice(c: ThemeChoice): void {
-  document.documentElement.dataset.theme = resolve(c);
+  paint(resolve(c));
   try {
     localStorage.setItem(KEY, c);
   } catch {
@@ -69,5 +77,5 @@ export function wireThemeButton(): void {
 
 // 跟随系统时，系统切换要跟着走；手动选定后系统再变也不动它
 media.addEventListener("change", () => {
-  if (getChoice() === "auto") document.documentElement.dataset.theme = resolve("auto");
+  if (getChoice() === "auto") paint(resolve("auto"));
 });

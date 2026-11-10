@@ -33,7 +33,20 @@ function peaks(data: Float32Array, cols: number): { min: Float32Array; max: Floa
 
 const pcmCache = new Map<string, Float32Array>();
 
-type WaveCanvas = HTMLCanvasElement & { __seek?: (t: number) => void };
+type WaveCanvas = HTMLCanvasElement & { __seek?: (t: number) => void; __repaint?: () => void };
+
+// 波形是**画进像素**的，不是样式——所以主题一换，`--accent` 变成新值，而画布上仍是旧像素。
+// 必须显式重画一次。重画入口挂在 canvas 节点自己身上（与 `__seek` 同一做法）：
+// 节点被换掉时闭包跟着失效，不留监听器、不留注册表——
+// 若用「全局注册表 + 切页注销」，漏一处注销就是往已分离的节点上反复画。
+export function repaintWaves(): void {
+  for (const c of Array.from(document.querySelectorAll<HTMLCanvasElement>("canvas"))) {
+    // 隐藏面板里的画布宽度是 0，重画只能拿到兜底宽度、画出一条错宽的线。
+    // 跳过是安全的：切回那个 tab 会整页重画（数据走 pcmCache，不解码第二次）。
+    if (c.clientWidth === 0) continue;
+    (c as WaveCanvas).__repaint?.();
+  }
+}
 
 export async function drawWave(canvas: HTMLCanvasElement, url: string, opts: WaveOpts): Promise<void> {
   let data = pcmCache.get(url);
@@ -109,6 +122,8 @@ export async function drawWave(canvas: HTMLCanvasElement, url: string, opts: Wav
 
   const el = canvas as WaveCanvas;
   el.__seek = opts.onSeek;
+  // 重画失败不该冒泡成未捕获异常：波形是辅助（b23），取不到就留着上一帧。
+  el.__repaint = () => void drawWave(canvas, url, opts).catch(() => {});
   el.dataset.waveStart = String(opts.span.start);
   el.dataset.waveDur = String(dur);
   if (!el.dataset.waveBound) {

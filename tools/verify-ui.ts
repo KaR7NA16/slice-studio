@@ -197,6 +197,10 @@ put(w("jobs", "ui-j2", "s00", "step.json"), { schema: 1, step: "s00", finished_a
 put(w("clips", "ui-c2", "clip.json"), { schema: 1, id: "ui-c2", job_id: "ui-j2", title: "缺产物的片段", start: 1, end: 3, fps: null });
 put(w("clips", "ui-c2", "s03", "step.json"), { schema: 1, step: "s03", finished_at: now, inputs: [], outputs: ["sentences.json"] });
 
+// job ui-j3：一步都没跑过（连 step.json 都没有）。用来验「整条链路未跑」只说一遍——
+// 以前逐步铺「未跑」，一屏出现三次同一个词，读起来像三件各自独立的毛病。
+put(w("jobs", "ui-j3", "job.json"), { schema: 1, id: "ui-j3", video_path: fakeVideo, srt_path: null, created_at: now });
+
 // ---- 起服务：脚本内 spawn、脚本内 kill（shell 的 job control 在非交互环境下不可靠）----
 const srv = spawn(process.execPath, ["src/server/main.ts", ROOT], { stdio: ["ignore", "pipe", "inherit"] });
 const port = await new Promise<string>((resolve, reject) => {
@@ -1035,6 +1039,127 @@ try {
     if (hit.length) leaks.push(`${route} → ${hit.join(" / ")}`);
   }
   check("界面文案里没有内部合约编号（bNN）", leaks, []);
+
+  // ---- 第 19 轮：像素产物跟着主题走 / 惰性依赖不借状态词 / 全未跑只说一遍 ----
+  //
+  // 这三条共同的教训：前 18 轮的断言**全都在默认态量一次**就收工，于是「切换之后才对」这一类
+  // 缺陷一条都抓不到（N-3 就是这么漏的：浅色下量到的色值完美，暗色下等于没画）。
+  // 凡是有「切换」语义的东西，判据必须在切换后重新采样。
+
+  // N-3：波形是画进像素的，不是样式——切主题不会自动变色。以前只在绘制那一刻读一次令牌。
+  await page.goto(`${base}/#/clip/ui-c1/s03`);
+  await page.waitForSelector("#s03-wave");
+  // 解码 + 绘制是异步的：等到真有一帧不透明像素再采样，否则量到的是空白画布（那会让断言假绿）
+  await page.waitForFunction(
+    () => {
+      const c = document.querySelector("#s03-wave") as HTMLCanvasElement | null;
+      const g = c?.getContext("2d");
+      if (!c || !g || !c.width) return false;
+      const d = g.getImageData(0, 0, c.width, c.height).data;
+      for (let i = 3; i < d.length; i += 4) if ((d[i] as number) > 200) return true;
+      return false;
+    },
+    null,
+    { timeout: 20000 },
+  );
+  // 取**波形线**的色：波形描边 globalAlpha 0.95（像素 alpha≈242），句子边界竖线 alpha=255，
+  // 两者都在同一张画布上。只按 alpha 筛会筛到边界线（它更不透明），量出来的就是 --border 而不是
+  // --accent——第一版断言就栽在这里。所以取 alpha∈[230,250] 的像素里出现最多的那个色。
+  // getImageData 返回非预乘 RGBA，所以这个 RGB 就是令牌色本身，不需要再合成。
+  const lineRgb = async (): Promise<number[] | null> =>
+    page.evaluate(() => {
+      const c = document.querySelector("#s03-wave") as HTMLCanvasElement;
+      const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+      const hist = new Map<number, number>();
+      for (let i = 0; i < d.length; i += 4) {
+        const a = d[i + 3] as number;
+        if (a < 230 || a > 250) continue;
+        const k = ((d[i] as number) << 16) | ((d[i + 1] as number) << 8) | (d[i + 2] as number);
+        hist.set(k, (hist.get(k) ?? 0) + 1);
+      }
+      let bestK = -1;
+      let bestN = 0;
+      for (const [k, n] of hist) if (n > bestN) {
+        bestN = n;
+        bestK = k;
+      }
+      return bestK < 0 ? null : [(bestK >> 16) & 255, (bestK >> 8) & 255, bestK & 255];
+    });
+  // --accent 的计算值交给浏览器自己解析（hex / color-mix 都吃），不让断言抄一份色值。
+  const accentRgb = async (): Promise<number[]> =>
+    page.evaluate(() => {
+      const p = document.createElement("span");
+      p.style.color = "var(--accent)";
+      document.body.appendChild(p);
+      const cs = getComputedStyle(p).color;
+      p.remove();
+      const n = (cs.match(/[\d.]+/g) ?? []).map(Number);
+      const k = cs.startsWith("color(") ? 255 : 1; // color(srgb 0.1 …) 前三项是 0–1
+      return [Math.round((n[0] ?? 0) * k), Math.round((n[1] ?? 0) * k), Math.round((n[2] ?? 0) * k)];
+    });
+  const rgbDist = (a: number[], b: number[]): number => Math.max(...a.map((v, i) => Math.abs(v - (b[i] ?? 0))));
+
+  // 先把主题强制到浅色（上一个用例可能留下任意状态），采样；再点一次切暗色，采样。
+  // 只有两侧都量，才能证明线色是「跟着令牌变」而不是「本来就长这样」。
+  // ⚠️ 用**选择**（localStorage 的 ss-theme）判断，不能用 dataset.theme：
+  // auto 在浅色系统下解析出来同样是 light，拿解析结果判断会以为「已经到位」、一次都不点
+  // （第一版断言就卡在这——它当场报了个「没切到暗色」的假红，其实按钮一下都没按）。
+  for (let i = 0; i < 3; i++) {
+    if ((await page.evaluate(() => localStorage.getItem("ss-theme"))) === "light") break;
+    await page.click("#btn-theme");
+  }
+  check("前置：主题选择已停在「浅色」", await page.evaluate(() => localStorage.getItem("ss-theme")), "light");
+  const accentLight = await accentRgb();
+  const lineLight = await lineRgb();
+  check(
+    `浅色下波形线用的就是 --accent（实测 ${lineLight ?? "没找到波形线"} vs ${accentLight}）`,
+    lineLight !== null && rgbDist(lineLight, accentLight) <= 12,
+    true,
+  );
+
+  await page.click("#btn-theme"); // light → dark
+  check("点一次主题按钮确实到暗色（否则下面两条是空转）", await page.$eval("html", (e) => e.dataset.theme === "dark"), true);
+  const lineDark = await lineRgb();
+  const accentDark = await accentRgb();
+  check(
+    `切到暗色后波形线真的重画了（${lineLight} → ${lineDark}）`,
+    lineLight !== null && lineDark !== null && rgbDist(lineLight, lineDark) > 20,
+    true,
+  );
+  check(
+    `暗色下波形线跟着 --accent 走（实测 ${lineDark} vs ${accentDark}）`,
+    lineDark !== null && rgbDist(lineDark, accentDark) <= 12,
+    true,
+  );
+
+  // N-5：惰性依赖的判据是「产物在不在磁盘上能不能用」（types.ts 的 LazyDep），不是 status。
+  // 先取对照：ui-c1 有 vocals.wav，同一条提示不该出现——否则「永远都出」也能让下面的断言通过。
+  const lazyOnReady = await page.$eval("#panel-s03", (e) => (e.textContent ?? "").includes("没有可用产物"));
+  check("s02 产物齐备的片段不出现「没有可用产物」", lazyOnReady, false);
+
+  // ui-c2 没有 s02 产物 → 这里必须出提示；提示里不许出现状态词，否则会与同屏待办条的
+  // 「丢失」互相打架（同一件事两个词，读的人不知道该信哪个）。
+  await page.goto(`${base}/#/clip/ui-c2/s03`);
+  // ⚠️ 不能只等 `#panel-s03 .hint.block`：上一个片段的 DOM 里已经有这个元素，选择器会立刻
+  // 命中**旧页面**，量到的是 ui-c1 的文案（第一版断言就栽在这里）。等「这个面板里出现了第 2 条
+  // block 级提示」——只有 ui-c2 的惰性提示才会让它变成 2。
+  await page
+    .waitForFunction(() => document.querySelectorAll("#panel-s03 .hint.block").length >= 2, null, { timeout: 8000 })
+    .catch(() => {});
+  const lazyTxt = await page.$eval("#panel-s03", (e) =>
+    Array.from(e.querySelectorAll(".hint.block"))
+      .map((n) => (n.textContent ?? "").replace(/\s+/g, " ").trim())
+      .join(" | "),
+  );
+  check(`惰性依赖提示确实出现在 ui-c2 的 s03（实测「${lazyTxt.slice(0, 26)}」）`, lazyTxt.includes("没有可用产物"), true);
+  check("惰性依赖提示不借用状态词（未跑 / 丢失 / 就绪）", /未跑|丢失|就绪/.test(lazyTxt), false);
+
+  // W-09：一步都没跑过的链路，逐步铺「未跑」会让一屏出现三次同一个词，读起来像三件各自的问题。
+  await page.goto(`${base}/#/job/ui-j3`);
+  await page.waitForSelector(".steps-line");
+  const chipsTxt = await page.$eval(".steps-line", (e) => (e.textContent ?? "").replace(/\s+/g, " ").trim());
+  check(`一步没跑过的链路只说一遍「未跑」（实测「${chipsTxt}」）`, (chipsTxt.match(/未跑/g) ?? []).length <= 1, true);
+  check("并且明确说的是「本链路还没跑过」", chipsTxt.includes("本链路还没跑过"), true);
 
   check("全程没有出现原生 alert/confirm/prompt", nativeDialogs, 0);
 

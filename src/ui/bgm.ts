@@ -92,7 +92,7 @@ export async function s04Panel(
       </div>
       <div class="actions">
         <button class="btn" id="run-s04"${canStart ? "" : " disabled"}>${icon("refresh", 12)} ${st.status === "empty" ? "跑一次" : "重跑"}</button>
-        <span class="msg" id="s04-status"></span>
+        <span class="msg" id="s04-status" role="status" aria-live="polite"></span>
       </div>
       ${depHint(st, byId, linkFor)}
       ${v.missing_pick ? `<div class="warn-box inset">${icon("warn", 12)}你人工选的那首已不在曲库（${esc(v.pick!.track_id)}）——s05 出片会因此报错。重新入库、换一首，或清除人工选择。</div>` : ""}

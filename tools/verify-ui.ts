@@ -1204,6 +1204,255 @@ try {
   check(`两页播放器同宽（实测 ${vJob} / ${vClip}）`, vJob, vClip);
   check(`播放器不超过 b10 的 900 上限（实测 ${vJob}）`, vJob <= 900 && vJob > 0, true);
 
+  // ---- [L] 可访问性与控件边界 ----
+  // ⚠️ 五个面板是一次性全渲染的（只切 hidden），所以「等 #panel-x 出现」会永远立即命中旧 DOM。
+  // 判据必须同时要求：哈希已切过去 + 目标面板不 hidden + tab 节点在。这条纪律在第 19/20 轮
+  // 各栽过一次（N-5 的惰性提示、W-05 的两页同宽），这里一次性写成 helper 复用。
+  const gotoClipTab = async (clipId: string, tabId: string): Promise<void> => {
+    await page.goto(`${base}/#/clip/${clipId}/${tabId}`);
+    await page.waitForFunction(
+      (t) => {
+        const p = document.getElementById(`panel-${t}`);
+        return location.hash.endsWith(`/${t}`) && !!p && !p.hasAttribute("hidden") && !!document.getElementById(`tab-${t}`);
+      },
+      tabId,
+      { timeout: 8000 },
+    );
+  };
+
+  // N-1：五个 tab 以前只是五个 <button>——没有 tablist/tab/tabpanel，读屏念成五个孤立按钮，
+  // 五个都 tabIndex=0（按 Tab 要连过五站），← → 完全不动。
+  await gotoClipTab("ui-c1", "s03");
+  const tabsA11y = await page.evaluate(() => {
+    const list = document.querySelector<HTMLElement>(".tabs");
+    const btns = Array.from(document.querySelectorAll<HTMLButtonElement>(".tabs .tab"));
+    const panelOf = (b: HTMLButtonElement): HTMLElement | null =>
+      document.getElementById(b.getAttribute("aria-controls") ?? "");
+    return {
+      listRole: list?.getAttribute("role") ?? null,
+      listLabel: list?.getAttribute("aria-label") ?? null,
+      ids: btns.map((b) => b.id),
+      roles: btns.map((b) => b.getAttribute("role")),
+      selected: btns.map((b) => b.getAttribute("aria-selected")),
+      tabindex: btns.map((b) => b.tabIndex),
+      panelRole: btns.map((b) => panelOf(b)?.getAttribute("role") ?? null),
+      labelledby: btns.map((b) => panelOf(b)?.getAttribute("aria-labelledby") ?? null),
+      visible: btns.map((b) => {
+        const p = panelOf(b);
+        return !!p && !p.hasAttribute("hidden");
+      }),
+    };
+  });
+  const onAt = tabsA11y.selected.indexOf("true");
+  check(
+    `tab 容器是 tablist 且带可读名字（实测 role=${tabsA11y.listRole} / ${tabsA11y.listLabel}）`,
+    tabsA11y.listRole === "tablist" && !!tabsA11y.listLabel,
+    true,
+  );
+  check(
+    `五个 tab 都是 role=tab（实测 ${tabsA11y.roles.join(",")}）`,
+    tabsA11y.roles.length === 5 && tabsA11y.roles.every((r) => r === "tab"),
+    true,
+  );
+  check(
+    `每个 tab 的 aria-controls 都指到 tabpanel（实测 ${tabsA11y.panelRole.join(",")}）`,
+    tabsA11y.panelRole.every((r) => r === "tabpanel"),
+    true,
+  );
+  check(
+    `tabpanel 的 aria-labelledby 回指自己的 tab（实测 ${tabsA11y.labelledby.join(",")}）`,
+    tabsA11y.labelledby.every((v, i) => v !== null && v === tabsA11y.ids[i]),
+    true,
+  );
+  check(
+    `当前 tab 唯一被标为选中，且就是 s03（实测 ${tabsA11y.selected.join(",")}）`,
+    tabsA11y.selected.filter((v) => v === "true").length === 1 && tabsA11y.ids[onAt] === "tab-s03",
+    true,
+  );
+  check(
+    `roving tabindex：只有当前 tab 是 0（实测 ${tabsA11y.tabindex.join(",")}）`,
+    tabsA11y.tabindex.filter((v) => v === 0).length === 1 && tabsA11y.tabindex[onAt] === 0,
+    true,
+  );
+  check(
+    `选中的 tab 与可见面板是同一个（实测 visible=${tabsA11y.visible.join(",")}）`,
+    tabsA11y.visible.filter(Boolean).length === 1 && tabsA11y.visible[onAt] === true,
+    true,
+  );
+
+  // 键盘：← → 必须真的切走，且焦点跟过去——路由是整页重画，不还焦点就只能生效一次
+  await page.focus("#tab-s03");
+  await page.keyboard.press("ArrowRight");
+  await page
+    .waitForFunction(
+      () => {
+        const p = document.getElementById("panel-s04");
+        return location.hash.endsWith("/s04") && !!p && !p.hasAttribute("hidden") && document.activeElement?.id === "tab-s04";
+      },
+      null,
+      { timeout: 8000 },
+    )
+    .catch(() => {});
+  const afterRight = await page.evaluate(() => ({
+    hash: location.hash,
+    active: document.activeElement?.id ?? null,
+    selected: document.querySelector(".tabs .tab[aria-selected='true']")?.id ?? null,
+  }));
+  check(`按 → 切到下一个 tab（实测 ${afterRight.hash}）`, afterRight.hash.endsWith("/s04"), true);
+  check(`切完焦点落在新 tab 上，不留在 body（实测 ${afterRight.active}）`, afterRight.active === "tab-s04", true);
+  check(`aria-selected 跟着走到 s04（实测 ${afterRight.selected}）`, afterRight.selected === "tab-s04", true);
+
+  await page.keyboard.press("ArrowLeft");
+  await page
+    .waitForFunction(() => location.hash.endsWith("/s03") && document.activeElement?.id === "tab-s03", null, { timeout: 8000 })
+    .catch(() => {});
+  check("按 ← 回到 s03（双向都能走，不是只往右）", await page.evaluate(() => location.hash.endsWith("/s03")), true);
+
+  // 首尾相接：第一个再往左应绕到最后一个
+  await gotoClipTab("ui-c1", "s02");
+  await page.focus("#tab-s02");
+  await page.keyboard.press("ArrowLeft");
+  await page
+    .waitForFunction(() => location.hash.endsWith("/tree") && document.activeElement?.id === "tab-tree", null, { timeout: 8000 })
+    .catch(() => {});
+  check("s02 按 ← 绕到末尾的「分叉树」", await page.evaluate(() => location.hash.endsWith("/tree")), true);
+
+  // N-2：状态位必须是 live region，否则失败对读屏用户等于没发生（WCAG 4.1.3）。
+  // 两段都要验：①模板默认就注册（region 晚于内容变化才出现，第一条消息会漏）；
+  // ②真失败时升成 alert（assertive），不能还停在 polite 慢慢排。
+  await gotoClipTab("ui-c1", "s03");
+  const msgAttrs = await page.evaluate(() =>
+    Array.from(document.querySelectorAll(".msg")).map((el) => ({
+      id: el.id,
+      role: el.getAttribute("role"),
+      live: el.getAttribute("aria-live"),
+    })),
+  );
+  const msgBad = msgAttrs.filter((m) => m.role !== "status" || m.live !== "polite");
+  check(
+    `状态位默认就是 polite 的 live region（实测 ${msgAttrs.length} 处，不合规 ${msgBad.length} 处：${msgBad.map((m) => m.id).join(",") || "无"}）`,
+    msgAttrs.length > 0 && msgBad.length === 0,
+    true,
+  );
+
+  check(
+    "前置：重建句流按钮可用（禁用则下面的失败触发是空转）",
+    await page.$eval("#run-build", (e: HTMLButtonElement) => !e.disabled),
+    true,
+  );
+  // 拦一个 500，让 runAndPoll 走 err 分支；这是唯一能真看到「失败怎么播报」的路径
+  await page.route("**/api/run", (r) =>
+    r.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "验证故意失败" }) }),
+  );
+  await page.click("#run-build");
+  await page.waitForSelector('.modal-foot button[data-act="ok"]', { timeout: 8000 });
+  await page.click('.modal-foot button[data-act="ok"]');
+  await page.waitForSelector("#run-status.err", { timeout: 8000 });
+  const errMsg = await page.$eval("#run-status", (e) => ({
+    role: e.getAttribute("role"),
+    live: e.getAttribute("aria-live"),
+    txt: (e.textContent ?? "").trim(),
+  }));
+  check(
+    `失败消息升成 alert/assertive（实测 role=${errMsg.role} / aria-live=${errMsg.live}）`,
+    errMsg.role === "alert" && errMsg.live === "assertive",
+    true,
+  );
+  check(`失败消息确实写了内容（空 region 一样等于没报）实测「${errMsg.txt.slice(0, 20)}」`, errMsg.txt.length > 0, true);
+  await page.unroute("**/api/run");
+
+  // W-06 / N-6：控件的边框要真是个边框，有色 chip 不要画一条同色的假线。
+  // 色值都要合成到不透明祖先再算——chip 的底是半透明色块，直接比 borderColor 会得出离谱的值。
+  await page.goto(`${base}/#/job/ui-j1`);
+  await page.waitForSelector(".steps-line", { timeout: 8000 });
+  const borderMetrics = (): Promise<{ btn: number | null; chips: (number | null)[]; theme: string } | null> =>
+    page.evaluate(() => {
+      type RGBA = { r: number; g: number; b: number; a: number };
+      const parse = (c: string): RGBA => {
+        const m = (c.match(/[\d.]+/g) ?? []).map(Number);
+        const v = /^\s*color\(/.test(c) ? [m[0]! * 255, m[1]! * 255, m[2]! * 255, m[3]] : m;
+        return { r: v[0] ?? 0, g: v[1] ?? 0, b: v[2] ?? 0, a: v[3] ?? 1 };
+      };
+      const over = (fg: RGBA, bg: RGBA): RGBA => ({
+        r: fg.r * fg.a + bg.r * (1 - fg.a),
+        g: fg.g * fg.a + bg.g * (1 - fg.a),
+        b: fg.b * fg.a + bg.b * (1 - fg.a),
+        a: 1,
+      });
+      const lum = ({ r, g, b }: RGBA): number => {
+        const f = (v: number): number => {
+          const x = v / 255;
+          return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+      };
+      const ratio = (a: RGBA, b: RGBA): number => {
+        const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m);
+        return Math.round(((x! + 0.05) / (y! + 0.05)) * 1000) / 1000;
+      };
+      const painted = (el: Element): RGBA => {
+        const stack: RGBA[] = [];
+        for (let n: Element | null = el; n; n = n.parentElement) {
+          const c = parse(getComputedStyle(n).backgroundColor);
+          if (c.a > 0) stack.push(c);
+          if (c.a === 1) break;
+        }
+        let base: RGBA = { r: 255, g: 255, b: 255, a: 1 };
+        for (let i = stack.length - 1; i >= 0; i--) base = over(stack[i]!, base);
+        return base;
+      };
+
+      const btn = document.querySelector<HTMLElement>(".minibtn");
+      const chip = document.querySelector<HTMLElement>(".chip");
+      if (!btn || !chip) return null;
+      const edge = (el: Element): RGBA => parse(getComputedStyle(el).borderTopColor);
+      const btnRatio = (() => {
+        const c = edge(btn);
+        return c.a === 0 ? null : ratio(c, painted(btn));
+      })();
+      // 同一元素叠类再量：数据里有没有 err/warn/miss 全凭当时状态，找实例会时有时无
+      const saved = chip.className;
+      const chips: (number | null)[] = [];
+      for (const k of ["err", "warn", "miss"]) {
+        chip.className = `chip ${k}`;
+        const c = edge(chip);
+        chips.push(c.a === 0 ? null : ratio(c, painted(chip)));
+      }
+      chip.className = saved;
+      return { btn: btnRatio, chips, theme: document.documentElement.dataset.theme ?? "?" };
+    });
+
+  // 先强制回浅色：上面 [K] 段结束时停在暗色
+  for (let i = 0; i < 4; i++) {
+    if ((await page.evaluate(() => document.documentElement.dataset.theme)) === "light") break;
+    await page.click("#btn-theme");
+  }
+  const bl = await borderMetrics();
+  check("前置：任务页上找得到 .minibtn 与 .chip（否则下面三条是空转）", bl !== null, true);
+  if (bl) {
+    check(`浅色下 .minibtn 边框对自身底 ≥3:1（实测 ${bl.btn ?? "透明"}）`, bl.btn !== null && bl.btn >= 3, true);
+    check(
+      `浅色下有色 chip 要么无边框、要么 ≥1.5:1，不许画假线（实测 ${bl.chips.map((v) => v ?? "透明").join(" / ")}）`,
+      bl.chips.every((v) => v === null || v >= 1.5),
+      true,
+    );
+  }
+
+  // 切暗色再量一遍：这两条在暗色下各有一份令牌，只测浅色等于只测了一半
+  for (let i = 0; i < 4; i++) {
+    if ((await page.evaluate(() => document.documentElement.dataset.theme)) === "dark") break;
+    await page.click("#btn-theme");
+  }
+  const bd = await borderMetrics();
+  if (bd) {
+    check(`暗色下 .minibtn 边框对自身底 ≥3:1（实测 ${bd.btn ?? "透明"}）`, bd.btn !== null && bd.btn >= 3, true);
+    check(
+      `暗色下有色 chip 要么无边框、要么 ≥1.5:1（实测 ${bd.chips.map((v) => v ?? "透明").join(" / ")}）`,
+      bd.chips.every((v) => v === null || v >= 1.5),
+      true,
+    );
+  }
+
   check("全程没有出现原生 alert/confirm/prompt", nativeDialogs, 0);
 
   // ---- 截图：布局塌陷、圆点隐形这类问题只有看图才发现 ----

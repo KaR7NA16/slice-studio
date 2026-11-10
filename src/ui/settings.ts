@@ -123,7 +123,7 @@ export async function viewSettings(rerender: () => void): Promise<void> {
         <button class="btn" id="st-test">测试连接</button>
         <button class="btn primary" id="st-save">保存</button>
         <button class="btn" id="st-reload">放弃修改并重载</button>
-        <span class="msg" id="st-msg"></span>
+        <span class="msg" id="st-msg" role="status" aria-live="polite"></span>
       </div>
 
       <div class="section-title">全局自动化档位（片段可逐条覆盖）</div>

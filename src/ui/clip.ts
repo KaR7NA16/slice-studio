@@ -22,6 +22,10 @@ const TABS = [
 const mediaUrl = (clipId: string, step: string, name: string): string =>
   `/api/media/clip/${encodeURIComponent(clipId)}/${step}/${encodeURIComponent(name)}`;
 
+// 键盘切 tab 后要等路由把页面重画完才有新按钮可聚焦。这个只能跨调用存在，
+// 所以在模块级挂着：goTab 写入 → 下一次 viewClip 渲染完消费（见下方）。
+let pendingTabFocus: string | null = null;
+
 export async function viewClip(id: string, tab: string, rerender: () => void): Promise<void> {
   const owner = `clips/${id}`;
   const [survey, tree, auto] = await Promise.all([
@@ -57,19 +61,24 @@ export async function viewClip(id: string, tab: string, rerender: () => void): P
       <div class="card">
         <div class="card-head">${icon("film")} ${esc(clip.title)} <span class="num">${esc(id)}</span>
           <span class="sub num">${tc(clip.start)} – ${tc(clip.end)}</span></div>
-        <div class="tabs">${TABS.map((t) => {
+        <div class="tabs" role="tablist" aria-label="片段工作区">${TABS.map((t) => {
           const st = byId.get(t.id);
-          return `<button class="tab${t.id === cur ? " on" : ""}" data-tab="${t.id}" title="${esc(st ? `${t.title}：${STATE_TEXT[st.status]}` : t.title)}">
+          const on = t.id === cur;
+          // roving tabindex：整条 tab 只占一个 Tab 位，键内用 ← → 走。aria-selected 与
+          // hidden 必须同源（都由 cur 推出），否则读屏念的和眼睛看的会分家。
+          return `<button class="tab${on ? " on" : ""}" role="tab" id="tab-${t.id}" data-tab="${t.id}"
+            aria-selected="${on}" aria-controls="panel-${t.id}" tabindex="${on ? 0 : -1}"
+            title="${esc(st ? `${t.title}：${STATE_TEXT[st.status]}` : t.title)}">
             ${st ? `<span class="dot ${st.status}"></span>` : ""}${esc(t.title)}${st ? `<span class="tab-id">${esc(t.id)}</span>` : ""}</button>`;
         }).join("")}</div>
       </div>
 
-      <div class="panel" id="panel-s02"${cur === "s02" ? "" : " hidden"}>
+      <div class="panel" id="panel-s02" role="tabpanel" aria-labelledby="tab-s02"${cur === "s02" ? "" : " hidden"}>
         <div class="card ws-card">
           <div class="ws-head">${icon("wave")} 人声分离 ${automationRow(auto, "s02")}</div>
           <div class="actions">
             <button class="btn" id="run-s02"${canRun(s02, byId) ? "" : " disabled"}>${icon("refresh", 12)} ${s02.status === "empty" ? "跑一次" : "重跑"}</button>
-            <span class="msg" id="s02-status"></span>
+            <span class="msg" id="s02-status" role="status" aria-live="polite"></span>
           </div>
           ${depHint(s02, byId, linkFor)}
           <div class="hint block">demucs htdemucs 分离；权重随包预置在数据根，运行时不联网。</div>
@@ -78,14 +87,14 @@ export async function viewClip(id: string, tab: string, rerender: () => void): P
         <div class="card">${s02Audio || `<div class="empty-hint">还没有产物——先跑一次</div>`}</div>
       </div>
 
-      <div class="panel" id="panel-s03"${cur === "s03" ? "" : " hidden"}>
+      <div class="panel" id="panel-s03" role="tabpanel" aria-labelledby="tab-s03"${cur === "s03" ? "" : " hidden"}>
         <div class="card ws-card">
           <div class="ws-head">${icon("cut")} 逐句删留 ${automationRow(auto, "s03")}</div>
           <div class="actions">
             <button class="btn" id="run-build"${canRun(s03, byId) ? "" : " disabled"}>${icon("refresh", 12)} 重建句流</button>
             <button class="btn" id="run-draft"${canRun(s03, byId) ? "" : " disabled"}>${icon("spark", 12)} AI 出初稿</button>
-            <span class="msg" id="llm-reason"></span>
-            <span class="msg" id="run-status"></span>
+            <span class="msg" id="llm-reason" role="status" aria-live="polite"></span>
+            <span class="msg" id="run-status" role="status" aria-live="polite"></span>
           </div>
           ${depHint(s03, byId, linkFor)}
           <div class="hint block">人工改判记在覆盖层里——重跑构建、重抽 AI 都不会把它冲掉。</div>
@@ -103,14 +112,14 @@ export async function viewClip(id: string, tab: string, rerender: () => void): P
         <div class="card sents" id="s03-sents" role="listbox" aria-label="句流"></div>
       </div>
 
-      <div class="panel" id="panel-s04"${cur === "s04" ? "" : " hidden"}></div>
+      <div class="panel" id="panel-s04" role="tabpanel" aria-labelledby="tab-s04"${cur === "s04" ? "" : " hidden"}></div>
 
-      <div class="panel" id="panel-s05"${cur === "s05" ? "" : " hidden"}>
+      <div class="panel" id="panel-s05" role="tabpanel" aria-labelledby="tab-s05"${cur === "s05" ? "" : " hidden"}>
         <div class="card ws-card">
           <div class="ws-head">${icon("film")} 成片 ${automationRow(auto, "s05")}</div>
           <div class="actions">
             <button class="btn" id="run-s05"${canRun(s05, byId) ? "" : " disabled"}>${icon("refresh", 12)} ${s05.status === "empty" ? "出片" : "重出"}</button>
-            <span class="msg" id="s05-status"></span>
+            <span class="msg" id="s05-status" role="status" aria-live="polite"></span>
           </div>
           ${depHint(s05, byId, linkFor)}
           <div class="hint block">成片与素材包是两个并列的出口——只出一个不算完成。</div>
@@ -124,17 +133,41 @@ export async function viewClip(id: string, tab: string, rerender: () => void): P
         </div>
       </div>
 
-      <div class="panel" id="panel-tree"${cur === "tree" ? "" : " hidden"}>
+      <div class="panel" id="panel-tree" role="tabpanel" aria-labelledby="tab-tree"${cur === "tree" ? "" : " hidden"}>
         <div class="section-title">分叉树（主干 + 侧枝，切回不重跑 AI）</div>
         <div class="card tree" id="tree">${treeHtml(tree)}</div>
       </div>
     </div>`;
 
-  // tab 切换：改哈希（保持可分享/可后退），由路由重画
-  for (const b of Array.from(document.querySelectorAll<HTMLButtonElement>(".tabs .tab"))) {
-    b.addEventListener("click", () => {
-      location.hash = `#/clip/${encodeURIComponent(id)}/${b.dataset.tab}`;
-    });
+  // tab 切换：改哈希（保持可分享/可后退），由路由重画。
+  // 重画会把焦点一起扔掉，所以键盘切完还要把焦点还给新 tab——否则连按 ← → 只生效一次。
+  const tabBtns = Array.from(document.querySelectorAll<HTMLButtonElement>(".tabs .tab"));
+  const goTab = (next: string | undefined): void => {
+    if (!next || next === cur) return;
+    pendingTabFocus = next;
+    location.hash = `#/clip/${encodeURIComponent(id)}/${next}`;
+  };
+  for (const b of tabBtns) b.addEventListener("click", () => goTab(b.dataset.tab));
+
+  // 横向 tablist：← → 首尾相接，Home/End 到两端；空格与回车由 button 自身的 click 兜住
+  document.querySelector<HTMLElement>(".tabs")?.addEventListener("keydown", (e) => {
+    const at = tabBtns.indexOf(e.target as HTMLButtonElement);
+    if (at < 0) return;
+    const last = tabBtns.length - 1;
+    let next = -1;
+    if (e.key === "ArrowRight") next = at === last ? 0 : at + 1;
+    else if (e.key === "ArrowLeft") next = at === 0 ? last : at - 1;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = last;
+    if (next < 0) return;
+    e.preventDefault();
+    goTab(tabBtns[next]?.dataset.tab);
+  });
+
+  if (pendingTabFocus) {
+    const t = pendingTabFocus;
+    pendingTabFocus = null;
+    document.getElementById(`tab-${t}`)?.focus({ preventScroll: true });
   }
 
   await wireTree(owner, rerender);

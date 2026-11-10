@@ -77,7 +77,7 @@ export function pickPath(opts: PickOptions): Promise<string | null> {
         <div class="picker-list" id="pk-list" role="listbox" aria-label="文件列表"></div>`,
       footHtml: `<button class="btn" type="button" data-cancel>取消</button>
         <span class="spacer"></span>
-        <span class="msg" id="pk-msg"></span>
+        <span class="msg" id="pk-msg" role="status" aria-live="polite"></span>
         <button class="btn primary" type="button" data-ok disabled>${opts.selectLabel ?? "选择"}</button>`,
       onClose: () => finish(null),
     });

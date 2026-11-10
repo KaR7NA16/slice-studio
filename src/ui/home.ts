@@ -66,7 +66,7 @@ export async function viewHome(rerender: () => void): Promise<void> {
           <input class="text" id="nj-srt" placeholder="剪映导出的 .srt（可空，空则走本地转写）" spellcheck="false" />
         </div>
         <div class="actions">
-          <span class="msg" id="nj-msg">${survey.jobs.length ? "" : "还没有任务——先选择上面那个视频"}</span>
+          <span class="msg" id="nj-msg" role="status" aria-live="polite">${survey.jobs.length ? "" : "还没有任务——先选择上面那个视频"}</span>
           <span class="spacer"></span>
           <button class="btn primary" id="nj-go">${icon("plus", 12)} 建任务</button>
         </div>
@@ -81,7 +81,7 @@ export async function viewHome(rerender: () => void): Promise<void> {
           <input class="text" id="lib-root" placeholder="素材目录（只登记，不复制文件）" value="${esc(library.source_root === "（未入库）" ? "" : library.source_root)}" spellcheck="false" />
           <button class="btn" id="lib-go">重新入库</button>
         </div>
-        <div class="actions"><span class="msg" id="lib-msg">目录下需有 bgm / fonts / materials / memes / sfx 子目录；放入新素材后重新入库即可。</span></div>
+        <div class="actions"><span class="msg" id="lib-msg" role="status" aria-live="polite">目录下需有 bgm / fonts / materials / memes / sfx 子目录；放入新素材后重新入库即可。</span></div>
       </div>
       ${[...byKind.entries()].sort().map(([k, items]) => libGroup(k, items)).join("")}
     </div>`;

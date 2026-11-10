@@ -34,6 +34,12 @@ export function jobLabel(title: string, videoPath: string): string {
 export type MsgKind = "info" | "ok" | "err" | "busy";
 
 export function setMsg(el: HTMLElement, text: string, kind: MsgKind = "info"): void {
+  // 读屏靠 live region 播报，而 region 必须在内容变化**之前**就存在，所以各视图模板里
+  // .msg 默认已带 role=status + polite；这里只按 kind 改档：
+  // 进行中/成功是进度，polite 不打断用户；失败必须打断——失败被静音等于没报（WCAG 4.1.3）。
+  el.setAttribute("role", kind === "err" ? "alert" : "status");
+  el.setAttribute("aria-live", kind === "err" ? "assertive" : "polite");
+  el.setAttribute("aria-atomic", "true");
   el.classList.remove("ok", "err", "busy");
   if (kind !== "info") el.classList.add(kind);
   el.textContent = "";

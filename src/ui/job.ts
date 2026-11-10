@@ -116,7 +116,7 @@ export async function viewJob(id: string, rerender: () => void): Promise<void> {
           <span class="seg-group speeds" role="group" aria-label="播放速度">
             ${RATES.map((r) => `<button class="seg${r === 1 ? " on" : ""}" type="button" data-rate="${r}" aria-pressed="${r === 1}">${r}×</button>`).join("")}
           </span>
-          <span class="msg" id="pv-msg"></span>
+          <span class="msg" id="pv-msg" role="status" aria-live="polite"></span>
         </div>
       </div>
 
@@ -124,7 +124,7 @@ export async function viewJob(id: string, rerender: () => void): Promise<void> {
         <span class="selection-info" id="sel-info">未选区间</span>
         <input class="text" id="mc-title" placeholder="片段标题（可空）" />
         <button class="btn primary" id="mc-go"${sentences ? "" : " disabled"}>${icon("cut", 12)} 建片段</button>
-        <span class="msg" id="mc-msg"></span>
+        <span class="msg" id="mc-msg" role="status" aria-live="polite"></span>
       </div>
       <div class="card sents" id="job-sents" role="listbox" aria-label="句流">${sentences ? sentRows : `<div class="empty-hint">${esc(sentenceHint(s00))}</div>`}</div>
 
@@ -133,7 +133,7 @@ export async function viewJob(id: string, rerender: () => void): Promise<void> {
         <div class="ws-head">${icon("doc")} 字幕 ${automationRow(auto, "s00")}</div>
         <div class="actions">
           <button class="btn" id="run-s00"${canRun(s00, byId) ? "" : " disabled"}>${icon("doc", 12)} ${s00.status === "empty" ? "导入字幕" : "重跑字幕"}</button>
-          <span class="msg" id="run-status"></span>
+          <span class="msg" id="run-status" role="status" aria-live="polite"></span>
         </div>
         ${depHint(s00, byId, linkFor)}
         <div class="hint block">有 .srt 就直接解析；没有则用本地转写（SRT 优先，本地识别兜底）。重跑字幕后句子可能变少，选区会自动收回。</div>
@@ -144,7 +144,7 @@ export async function viewJob(id: string, rerender: () => void): Promise<void> {
         <div class="ws-head">${icon("spark")} 选高光 ${automationRow(auto, "s01")}</div>
         <div class="actions">
           <button class="btn" id="run-s01"${canRun(s01st, byId) && llm.ok ? "" : " disabled"}>${icon("spark", 12)} ${s01.ai ? "再抽一版" : "AI 挑高光"}</button>
-          <span class="msg" id="s01-status"></span>
+          <span class="msg" id="s01-status" role="status" aria-live="polite"></span>
         </div>
         ${depHint(s01st, byId, linkFor)}
         <div class="hint block">AI 只提案，不落定稿。采纳 = 用这条候选建片段，与手工建片段走同一条 API。</div>

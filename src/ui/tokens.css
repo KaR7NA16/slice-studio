@@ -19,7 +19,7 @@
 
   --border: #e4e2da; /* 仅分隔线 */
   --border-input: #8f8b82; /* 控件边界：白底 3.4:1 · 页底 3.2:1 */
-  --border-strong: #c8c4b8;
+  --border-strong: #c8c4b8; /* 只做色块衬底（::selection 等）；对白底 1.74:1，不是控件边界 */
   --border-stronger: #1a1916;
 
   --accent: #1a1916; /* 单色身份：主色即墨色 */

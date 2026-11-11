@@ -73,14 +73,14 @@ export async function withBusy<T>(btn: HTMLButtonElement | null, fn: () => Promi
 
 // ---- 任务操作 ----
 
+// 只产按钮串，容器（.card-tools）由调用方给：容器里还要塞别的东西（任务页的「复制路径」），
+// 自带一层会导致嵌套两层 .card-tools，分组间距被内层抹平成组内间距。
 export function jobTools(j: Pick<JobSurvey, "id" | "title" | "video_path" | "archived">): string {
   const name = jobLabel(j.title, j.video_path);
   const act = j.archived ? "restore" : "archive";
-  return `<span class="card-tools">
-    <button class="minibtn" type="button" data-job-act="rename" data-job="${esc(j.id)}" data-job-title="${esc(j.title)}" data-job-name="${esc(name)}">改名</button>
+  return `<button class="minibtn" type="button" data-job-act="rename" data-job="${esc(j.id)}" data-job-title="${esc(j.title)}" data-job-name="${esc(name)}">改名</button>
     <button class="minibtn" type="button" data-job-act="${act}" data-job="${esc(j.id)}" data-job-name="${esc(name)}">${j.archived ? "恢复" : "归档"}</button>
-    <button class="minibtn" type="button" data-job-act="delete" data-job="${esc(j.id)}" data-job-name="${esc(name)}">删除</button>
-  </span>`;
+    <button class="minibtn danger" type="button" data-job-act="delete" data-job="${esc(j.id)}" data-job-name="${esc(name)}">删除</button>`;
 }
 
 export function bindJobActions(rerender: () => void): void {

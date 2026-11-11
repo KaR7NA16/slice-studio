@@ -674,6 +674,53 @@ try {
   const sneaky = await fetch(`${base}/api/jobs/${encodeURIComponent("../x")}`, { method: "DELETE" });
   check("拒绝带着路径的任务 id", sneaky.status, 400);
 
+  // 任务行按钮组：右侧留白与左侧文字缩进对称；删除与归档之间要比组内更松；
+  // 删除必须走危险色（颜色不是唯一信号——按钮文字已写明「删除」）。
+  await page.goto(`${base}/#/`);
+  await page.waitForSelector("[data-job='ui-j1'][data-job-act='delete']");
+  const tools = await page.evaluate(() => {
+    const del = document.querySelector<HTMLElement>("[data-job='ui-j1'][data-job-act='delete']");
+    const group = del?.closest<HTMLElement>(".card-tools");
+    const card = del?.closest<HTMLElement>(".card");
+    const head = card?.querySelector<HTMLElement>(".job-row > .card-head");
+    if (!del || !group || !card || !head) return null;
+    const btns = Array.from(group.querySelectorAll<HTMLElement>(".minibtn"));
+    const [ren, arc] = btns;
+    const gap = (a: HTMLElement, b: HTMLElement): number => b.getBoundingClientRect().x - a.getBoundingClientRect().right;
+    const probe = document.createElement("div");
+    probe.style.color = "var(--text-danger)";
+    document.body.appendChild(probe);
+    const token = getComputedStyle(probe).color;
+    probe.remove();
+    return {
+      inner: +gap(ren!, arc!).toFixed(1),
+      beforeDelete: +gap(arc!, del).toFixed(1),
+      leftPad: parseFloat(getComputedStyle(head).paddingLeft),
+      rightGap: +(card.getBoundingClientRect().right - del.getBoundingClientRect().right).toFixed(1),
+      delColor: getComputedStyle(del).color,
+      token,
+    };
+  });
+  check("前置：任务卡上找得到三个按钮（否则下面三条是空转）", tools !== null, true);
+  if (tools) {
+    check(
+      `按钮组右侧留白与左侧文字缩进对称（左 ${tools.leftPad} / 右 ${tools.rightGap}，差 1px 是卡片边框）`,
+      Math.abs(tools.rightGap - 1 - tools.leftPad) <= 0.5,
+      true,
+    );
+    check(
+      `删除与归档的间隙明显大于组内（组内 ${tools.inner} / 删除前 ${tools.beforeDelete}）`,
+      tools.beforeDelete - tools.inner >= 8,
+      true,
+    );
+    check(`删除按钮走危险色而非普通文字色（实测 ${tools.delColor}，令牌 ${tools.token}）`, tools.delColor === tools.token, true);
+  }
+
+  // 容器只允许一层：jobTools 自带包裹 + 调用方再包一层，组间间距会被内层抹平成组内间距。
+  await page.goto(`${base}/#/job/ui-j1`);
+  await page.waitForSelector(".card-tools .minibtn");
+  check("按钮组容器不嵌套（.card-tools 里没有第二个 .card-tools）", await page.$$eval(".card-tools .card-tools", (els) => els.length), 0);
+
 
   // ============ J. 视觉与可访问性（规划 v2.8 判据） ============
   console.log("[J] 密度 / 对比度 / 焦点 / 主题 / 断点 / 选择器 / 失败出口");
@@ -1422,7 +1469,7 @@ try {
   // 色值都要合成到不透明祖先再算——chip 的底是半透明色块，直接比 borderColor 会得出离谱的值。
   await page.goto(`${base}/#/job/ui-j1`);
   await page.waitForSelector(".steps-line", { timeout: 8000 });
-  const borderMetrics = (): Promise<{ btn: number | null; chips: (number | null)[]; theme: string } | null> =>
+  const borderMetrics = (): Promise<{ btn: number | null; del: number | null; chips: (number | null)[]; theme: string } | null> =>
     page.evaluate(() => {
       type RGBA = { r: number; g: number; b: number; a: number };
       const parse = (c: string): RGBA => {
@@ -1460,6 +1507,7 @@ try {
       };
 
       const btn = document.querySelector<HTMLElement>(".minibtn");
+      const del = document.querySelector<HTMLElement>(".minibtn.danger");
       const chip = document.querySelector<HTMLElement>(".chip");
       if (!btn || !chip) return null;
       const edge = (el: Element): RGBA => parse(getComputedStyle(el).borderTopColor);
@@ -1467,6 +1515,9 @@ try {
         const c = edge(btn);
         return c.a === 0 ? null : ratio(c, painted(btn));
       })();
+      // 删除按钮是文字危险色，不是边框：danger 色对自身底要够 4.5:1（正文级），
+      // 3:1 那档只够描边，拿它量文字会把不合格判成合格。
+      const delRatio = del ? ratio(parse(getComputedStyle(del).color), painted(del)) : null;
       // 同一元素叠类再量：数据里有没有 err/warn/miss 全凭当时状态，找实例会时有时无
       const saved = chip.className;
       const chips: (number | null)[] = [];
@@ -1476,7 +1527,7 @@ try {
         chips.push(c.a === 0 ? null : ratio(c, painted(chip)));
       }
       chip.className = saved;
-      return { btn: btnRatio, chips, theme: document.documentElement.dataset.theme ?? "?" };
+      return { btn: btnRatio, del: delRatio, chips, theme: document.documentElement.dataset.theme ?? "?" };
     });
 
   // 先强制回浅色：上面 [K] 段结束时停在暗色
@@ -1488,6 +1539,7 @@ try {
   check("前置：任务页上找得到 .minibtn 与 .chip（否则下面三条是空转）", bl !== null, true);
   if (bl) {
     check(`浅色下 .minibtn 边框对自身底 ≥3:1（实测 ${bl.btn ?? "透明"}）`, bl.btn !== null && bl.btn >= 3, true);
+    check(`浅色下删除按钮的危险色文字 ≥4.5:1（实测 ${bl.del ?? "找不到 .minibtn.danger"}）`, bl.del !== null && bl.del >= 4.5, true);
     check(
       `浅色下有色 chip 要么无边框、要么 ≥1.5:1，不许画假线（实测 ${bl.chips.map((v) => v ?? "透明").join(" / ")}）`,
       bl.chips.every((v) => v === null || v >= 1.5),
@@ -1503,6 +1555,7 @@ try {
   const bd = await borderMetrics();
   if (bd) {
     check(`暗色下 .minibtn 边框对自身底 ≥3:1（实测 ${bd.btn ?? "透明"}）`, bd.btn !== null && bd.btn >= 3, true);
+    check(`暗色下删除按钮的危险色文字 ≥4.5:1（实测 ${bd.del ?? "找不到 .minibtn.danger"}）`, bd.del !== null && bd.del >= 4.5, true);
     check(
       `暗色下有色 chip 要么无边框、要么 ≥1.5:1（实测 ${bd.chips.map((v) => v ?? "透明").join(" / ")}）`,
       bd.chips.every((v) => v === null || v >= 1.5),

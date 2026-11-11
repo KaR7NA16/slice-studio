@@ -35,7 +35,7 @@ export async function viewHome(rerender: () => void): Promise<void> {
     return `<div class="card">
         <div class="job-row">
           <a class="card-head link" href="#/job/${encodeURIComponent(j.id)}">${icon("film")} <span class="job-name">${esc(jobLabel(j.title, j.video_path))}</span> <span class="num">${esc(j.id)}</span>${named ? ` <span class="sub">${esc(baseName(j.video_path))}</span>` : ""}</a>
-          ${jobTools(j)}
+          <span class="card-tools">${jobTools(j)}</span>
         </div>
         ${j.steps.map(stepRow).join("")}
         ${clips ? `<div class="clip-links">${clips}</div>` : ""}

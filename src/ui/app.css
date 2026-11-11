@@ -91,7 +91,11 @@ a.chip:hover { border-color: var(--border-input); background: var(--surface-2); 
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .card-head .job-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card-tools { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; flex: none; }
+.card-tools { display: inline-flex; align-items: center; gap: var(--pad-1); margin-left: auto; flex: none; }
+/* 改名/归档是可恢复的管理操作，删除不可恢复：分组靠更宽的间隙 + 危险色。
+   任务行右侧必须收 12px——margin-left:auto 会把按钮组顶到卡片边框上，
+   而左边文字缩进 12px、下面的 .step 也是 12px，左右不对称是硬错位。 */
+.job-row > .card-tools { padding-right: var(--pad-3); }
 .job-row { display: flex; align-items: stretch; border-bottom: 1px solid var(--border); }
 .job-row > a.card-head { border-bottom: none; flex: 1; min-width: 0; }
 .job-row > a.card-head:hover { background: var(--surface-1); }
@@ -229,6 +233,14 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .minibtn:hover:not(:disabled) { border-color: var(--border-input); background: var(--surface-1); }
 .minibtn:disabled { opacity: 0.45; cursor: not-allowed; }
 .minibtn[aria-busy="true"] { opacity: 0.7; cursor: progress; }
+/* 破坏性操作与 .btn.danger 同一套色。颜色不是唯一信号（按钮文字已写明「删除」），
+   它只是让这一格在三个同形按钮里不会被误认成「归档」。 */
+.minibtn.danger { color: var(--text-danger); }
+.minibtn.danger:hover:not(:disabled) { background: var(--bg-danger); border-color: var(--text-danger); }
+/* 与「归档」拉开到 4+8=12px（组内只有 4px）：可恢复与不可恢复之间要有距离。
+   不画竖分隔线——可用的 --border 只有 1.28:1，1px 的线在 24px 按钮旁根本看不见；
+   --border-input 是控件边界（tokens.css 第 4 条），拿来画装饰线语义越界。 */
+.card-tools .minibtn.danger { margin-left: var(--pad-2); }
 
 .hint { color: var(--text-secondary); font-size: var(--fs-sm); }
 .hint a, .hint .link { color: var(--text-primary); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--border-input); }
@@ -580,7 +592,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
   .todo { padding: 5px var(--pad-3); }
   .player { max-height: 36vh; }
   .card-head .sub { display: none; }
-  .card-tools { padding-right: 0; }
+  .job-row > .card-tools { padding-right: var(--pad-2); }
   .card-tools .minibtn { padding: 0 6px; }
 }
 

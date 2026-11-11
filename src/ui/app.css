@@ -272,6 +272,9 @@ input[type="checkbox"] { accent-color: var(--accent); }
    空内容时整段不占位：不知道进度时留一段空白，比留一条空边距更像坏了。 */
 .prog { margin-left: var(--pad-1); font-size: var(--fs-sm); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .prog:empty { display: none; }
+/* 「换字幕源」展开后的那行：路径输入占住剩余宽度，其余按钮靠右自然排开 */
+.swap-row { display: flex; align-items: center; gap: var(--pad-2); flex-wrap: wrap; margin-top: var(--pad-2); }
+.swap-row .text { flex: 1; min-width: 180px; }
 
 .file-chip {
   display: inline-flex; align-items: center; gap: 6px; min-width: 0;

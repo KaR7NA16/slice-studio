@@ -2,7 +2,7 @@
 // 运行：node src/server/main.ts [项目根]   （Node ≥ 22.18 直接跑 TS）
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -38,7 +38,8 @@ import { readLibrary } from "./library.ts";
 import { survey } from "./survey.ts";
 import { variantsView } from "./variants.ts";
 import { moodDomain } from "../steps/s04.ts";
-import { finishStep, inputRef, setActiveVariant } from "../steps/lib.ts";
+import { parseSrt } from "../steps/s00.ts";
+import { finishStep, inputRef, removeQuietly, setActiveVariant } from "../steps/lib.ts";
 
 const ROOT = path.resolve(process.argv[2] ?? process.cwd());
 // 代码目录 ≠ 数据根：前端产物与 ffprobe 在仓库里（按本文件位置推导），不随数据根走
@@ -109,8 +110,36 @@ async function createJob(res: ServerResponse, body: NewJob): Promise<void> {
   sendJson(res, { id });
 }
 
-async function createClip(res: ServerResponse, body: NewClip): Promise<void> {
-  const jobId = safeJobId(body.job_id ?? "");
+// 换字幕源：把 SRT 落到 jobDir/source.srt，供 s00 的「SRT 优先」路径读。
+// 这里的关键约束是「换源」≠「同一份源重算」。句子 id 是内容哈希（s00.ts 的 sentenceId），
+// 换源后旧 id 全部失联——overlay 与 ai 里那些改判会进 orphans，不会悄悄套到别的句子上。
+// 所以不做「按索引收敛选区」那种聪明处理：索引在换源后毫无意义，收敛只会把选区挪到不相干的句子。
+// 会丢的东西一次说清：选区在前端内存里（由界面清），AI 候选在这里删掉——
+// 留着就是一串永远对不上当前句流的孤儿，既不能采纳也解释不了来历。
+async function replaceSubtitle(res: ServerResponse, jobIdRaw: string, body: { srt_path?: string }): Promise<void> {
+  const id = safeJobId(jobIdRaw);
+  if (!id) return sendErr(res, 400, "任务 id 非法");
+  const dir = path.join(ROOT, "work", "jobs", id);
+  const job = await readJson<JobFile>(path.join(dir, "job.json"));
+  if (!job) return sendErr(res, 404, `任务不存在：${jobIdRaw}`);
+  const src = path.resolve(body.srt_path ?? "");
+  if (!(await exists(src))) return sendErr(res, 400, `字幕不存在：${src}`);
+  // 先解析一遍再落盘：换上一份解析不出句子的字幕，等于把这个任务改成「必然失败」，
+  // 而用户只会以为「选错文件了」。
+  let n = 0;
+  try {
+    n = parseSrt(await readFile(src, "utf8")).length;
+  } catch (e) {
+    return sendErr(res, 400, `字幕解析失败：${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (n === 0) return sendErr(res, 400, "这份字幕里没有解析出句子，换上去只会让字幕步骤失败");
+  await copyFile(src, path.join(dir, "source.srt"));
+  await writeJsonAtomic(path.join(dir, "job.json"), { ...job, srt_path: src } satisfies JobFile);
+  const aiErr = await removeQuietly(path.join(dir, "s01", "ai.json"));
+  sendJson(res, { ok: true, sentences: n, ai_cleared: !aiErr });
+}
+
+async function createClip(res: ServerResponse, body: NewClip): Promise<void> {  const jobId = safeJobId(body.job_id ?? "");
   if (!jobId) return sendErr(res, 400, "任务 id 非法");
   const jobDir = path.join(ROOT, "work", "jobs", jobId);
   const job = await readJson<JobFile>(path.join(jobDir, "job.json"));
@@ -477,6 +506,9 @@ const server = createServer(async (req, res) => {
     }
     if ((m = url.match(/^\/api\/media\/library\/([^/]+)$/))) return await libraryMedia(req, res, m[1]!);
 
+    if ((m = url.match(/^\/api\/jobs\/([^/]+)\/subtitle$/)) && req.method === "POST") {
+      return await replaceSubtitle(res, m[1]!, await readBody<{ srt_path?: string }>(req));
+    }
     if ((m = url.match(/^\/api\/jobs\/([^/]+)\/sentences$/))) {
       const file = await readJson<SentencesFile>(path.join(ROOT, "work", "jobs", m[1]!, "s00", "sentences.json"));
       return file ? sendJson(res, file) : sendErr(res, 404, "s00 未跑：先导入字幕");

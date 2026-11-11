@@ -7,9 +7,11 @@
 import type { AutomationView, CandidatesFile, S01AiFile, SentencesFile, Survey, VariantsView } from "../shared/types.ts";
 import { icon } from "./icons.ts";
 import {
-  api, app, bindJobActions, esc, jobLabel, jobTools, notFound, post, renderTodo, sentenceHint,
-  setMsg, stepChips, tc, topbar, withBusy,
+  api, app, bindJobActions, esc, jobLabel, jobTools, notFound, post, renderTodo, runAndPoll,
+  sentenceHint, setMsg, stepChips, tc, topbar, withBusy,
 } from "./lib.ts";
+import { confirmModal } from "./modal.ts";
+import { pickPath } from "./picker.ts";
 import { automationRow, canRun, depHint, runWithConfirm, treeHtml, wireAutomation, wireTree } from "./panel.ts";
 import { mountPlayback } from "./playback.ts";
 import { toast } from "./toast.ts";
@@ -147,7 +149,14 @@ export async function viewJob(id: string, rerender: () => void, stale?: () => bo
         <div class="ws-head">${icon("doc")} 字幕 ${automationRow(auto, "s00")}</div>
         <div class="actions">
           <button class="btn${s00.status === "empty" ? " primary" : ""}" id="run-s00"${canRun(s00, byId) ? "" : " disabled"}>${icon("doc", 12)} ${s00.status === "empty" ? "生成字幕" : "重跑字幕"}</button>
+          <button class="btn" id="swap-s00" type="button">换字幕源</button>
           <span class="msg" id="run-status" role="status" aria-live="polite"></span>
+        </div>
+        <div class="swap-row" id="swap-row" hidden>
+          <input class="text" id="swap-path" placeholder="SRT 文件路径" autocomplete="off" aria-label="字幕文件路径" />
+          <button class="minibtn" id="swap-browse" type="button">浏览…</button>
+          <button class="btn danger" id="swap-go" type="button">换源并重建</button>
+          <button class="minibtn" id="swap-cancel" type="button">放弃</button>
         </div>
         ${depHint(s00, byId, linkFor)}
       </div>
@@ -222,8 +231,68 @@ export async function viewJob(id: string, rerender: () => void, stale?: () => bo
     });
   });
 
-  const s01Status = document.getElementById("s01-status")!;
-  if (!llm.ok) {
+  // 换字幕源：这是**换一份字幕**，不是「用同一份重算」。
+  // 选区是索引（这里的内存 Map），换源后索引指向的已经是别的句子，所以只能清不能收敛；
+  // AI 候选由服务端删掉；人工删留按句子内容哈希挂钩，对不上的自然进孤儿。
+  const swapS00 = document.getElementById("swap-s00") as HTMLButtonElement;
+  const swapRow = document.getElementById("swap-row")!;
+  const swapPath = document.getElementById("swap-path") as HTMLInputElement;
+  const closeSwap = (): void => {
+    swapRow.hidden = true;
+    swapPath.value = "";
+  };
+  swapS00.addEventListener("click", () => {
+    swapRow.hidden = false;
+    swapPath.focus();
+  });
+  document.getElementById("swap-cancel")!.addEventListener("click", closeSwap);
+  document.getElementById("swap-browse")!.addEventListener("click", async () => {
+    const p = await pickPath({ mode: "srt", title: "选择字幕文件" });
+    if (p) swapPath.value = p;
+  });
+  document.getElementById("swap-go")!.addEventListener("click", async () => {
+    const p = swapPath.value.trim();
+    if (!p) {
+      toast("先填字幕文件路径，或点「浏览…」选一个", "err");
+      swapPath.focus();
+      return;
+    }
+    const ok = await confirmModal({
+      title: "换字幕源",
+      bodyHtml: `<div class="hint">换成：<code>${esc(p)}</code></div>
+        <div class="hint">确认后立刻按新字幕重建句子，并清掉下面这些：</div>
+        <ul class="hint">
+          <li>当前选区（它记的是第几句，换源后第几句已经不是原来那句）</li>
+          <li>AI 挑高光的候选（同样对应旧句子）</li>
+          <li>人工删留在对不上新句子时进「孤儿」，不会套到别的句子上</li>
+        </ul>
+        <div class="hint">下游（片段、成片）会被标脏，需要重跑。</div>`,
+      confirmLabel: "确认换源并重建",
+      danger: true,
+    });
+    if (!ok) return;
+    await withBusy(swapS00, async () => {
+      try {
+        const r = await post<{ ok: boolean; sentences: number; ai_cleared: boolean }>(
+          `/api/jobs/${encodeURIComponent(id)}/subtitle`,
+          { srt_path: p },
+        );
+        // 两处都要动：删 Map 条目只影响下次进页面，当前闭包里捕获的 sel 还在用。
+        sel.i = null;
+        sel.j = null;
+        selection.delete(id);
+        closeSwap();
+        const okRun = await runAndPoll(statusEl, owner, "s00", null);
+        if (okRun) toast(`字幕源已换：${r.sentences} 句${r.ai_cleared ? "，AI 候选已清" : ""}`);
+        else toast("字幕源已换，但按新字幕重建没成功——原因看在状态位", "err");
+        rerender();
+      } catch (e) {
+        toast(e instanceof Error ? e.message : String(e), "err");
+      }
+    });
+  });
+
+  const s01Status = document.getElementById("s01-status")!;  if (!llm.ok) {
     s01Status.classList.add("err");
     s01Status.innerHTML = `${esc(llm.reason ?? "")} <a class="link" href="#/settings">去设置</a>`;
   }

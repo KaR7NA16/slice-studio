@@ -1861,7 +1861,11 @@ try {
   // 这条要守的是**位置**而不是「有没有这个数字」：进度每块音频变一次，
   // 放进角色为 status 的区域里，读屏会一路念「2:15 / 10:00」，比没有进度更糟。
   console.log("\n[R] 转写进度：看得见，但不进 live region");
+  // 必须 reload 而不是 goto：这是单页应用，goto 到同一文档内的另一个 hash 只触发 hashchange，
+  // **文档不会重载**——模块级状态（选区 Map）和页面上残留的 toast 会整段继承下来。
+  // 实测过：不 reload 时这一段能读到上一段留下的 toast 文案，判据于是在验证别人的现场。
   await page.goto(`${base}/#/job/ui-j1`);
+  await page.reload();
   await page.waitForSelector("#job-sents .sent", { timeout: 8000 });
   await page.route("**/api/run", (route) => route.fulfill({ json: stubRun("r-prog", "running", new Date().toISOString()) }));
   const progSteps = ["0:03 / 10:00", "2:15 / 10:00", "7:40 / 10:00"];
@@ -1913,6 +1917,52 @@ try {
   check("跑完把进度旁注撤掉（不留一条停住的刻度）", await page.evaluate(() => document.querySelectorAll(".prog").length), 0);
   await page.unroute("**/api/run");
   await page.unroute(/\/api\/runs\/r-prog$/);
+
+  // ---- [S] 换字幕源：入口 / 说清代价 / 清掉选区 ----
+  // 选区的要害是它记「第几句」。换源后第 3 句已经不是原来那句，
+  // 按索引收敛等于把选区静默挪到不相干的句子上——所以只能清。
+  console.log("\n[S] 换字幕源：说清会丢什么，且选区必须清掉");
+  // 同 [R]：单页应用里 goto 不重载文档，必须 reload 才能从干净的选区与无 toast 的页面开始。
+  await page.goto(`${base}/#/job/ui-j1`);
+  await page.reload();
+  await page.waitForSelector("#job-sents .sent", { timeout: 8000 });
+  await page.click('[data-act="i"][data-idx="1"]');
+  await page.click('[data-act="j"][data-idx="3"]');
+  const selBefore = await page.evaluate(() => document.getElementById("sel-info")?.textContent ?? "");
+  check(`前置：先选一段区间（实测「${selBefore}」）`, selBefore.includes("已选"), true);
+
+  await page.click("#swap-s00");
+  const rowShown = await page.evaluate(() => !(document.getElementById("swap-row") as HTMLElement).hidden);
+  check("点「换字幕源」展开路径输入行", rowShown, true);
+  await page.fill("#swap-path", "C:/tmp/another.srt");
+
+  const swapReq: string[] = [];
+  await page.route("**/api/jobs/ui-j1/subtitle", (route) => {
+    swapReq.push(route.request().method());
+    return route.fulfill({ json: { ok: true, sentences: 9, ai_cleared: true } });
+  });
+  await page.route("**/api/run", (route) => route.fulfill({ json: stubRun("r-swap", "running", new Date().toISOString()) }));
+  await page.route(/\/api\/runs\/r-swap$/, (route) =>
+    route.fulfill({ json: { ...stubRun("r-swap", "done", new Date().toISOString()), message: "解析 9 句" } }),
+  );
+  await page.click("#swap-go");
+  await page.waitForSelector(".modal", { timeout: 8000 });
+  const swapBody = await page.evaluate(() => document.querySelector(".modal")?.textContent ?? "");
+  // 三件事都要说到：会清选区、会清 AI 候选、下游会被标脏。
+  // 只说「确认换源」等于让用户在不知情的情况下丢东西。
+  check("确认框说了会清选区", swapBody.includes("选区"), true);
+  check("确认框说了会清 AI 候选", swapBody.includes("候选"), true);
+  check("确认框说了下游会被标脏", swapBody.includes("标脏"), true);
+  await page.click('.modal [data-act="ok"]');
+  await page.waitForSelector(".toast", { timeout: 10000 });
+  const swapToast = await page.evaluate(() => document.querySelector(".toast")?.textContent ?? "");
+  check(`换源后如实报出结果（实测「${swapToast}」）`, swapToast.includes("字幕源已换"), true);
+  check("换源打的是 POST /api/jobs/:id/subtitle", swapReq.length === 1 && swapReq[0] === "POST", true);
+  const selAfter = await page.evaluate(() => document.getElementById("sel-info")?.textContent ?? "");
+  check(`换源后选区被清空（实测「${selAfter}」）`, selAfter.includes("已选"), false);
+  await page.unroute("**/api/jobs/ui-j1/subtitle");
+  await page.unroute("**/api/run");
+  await page.unroute(/\/api\/runs\/r-swap$/);
 
   await page.goto(`${base}/#/`);
   await page.waitForSelector("#nj-go", { timeout: 8000 });

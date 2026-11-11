@@ -526,6 +526,13 @@ try {
   });
   check("波形画布真的画了东西（不是空 canvas）", wavePx > 100, true);
 
+  // s03 面板实拍：这轮把「成片预览」开关挪进播放器卡片、片长说明挪到波形标题行，
+  // 位置对不对只能看图（元素都在、文字也对，但排错了这种缺陷判据看不出来）。
+  // 放系统临时目录，理由同文末那张总览图。
+  const shotS03 = path.join(SYSTEM_TEMP, "slice-ui-s03.png");
+  await page.screenshot({ path: shotS03, fullPage: true });
+  console.log(`\n截图（s03 面板）：${shotS03}`);
+
   check("成片预览默认开着", await page.$eval("#preview-cut", (el) => (el as HTMLInputElement).checked), true);
   check(
     "预览时长按当前删留算（留第二句 0.8 秒，删第三句）",

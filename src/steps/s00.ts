@@ -178,10 +178,11 @@ export async function runS00(root: string, owner: string, runId: string): Promis
   if (stale) console.log(`  ⚠️ 上次转写临时件清理失败：${stale}`);
 
   const raw = await readFile(path.join(jobDir, "source.srt"), "utf8").catch(() => null);
-  // 输入登记：SRT 路径挂 source.srt，ASR 路径挂 job.json（它钉住了 video_path）——
-  // 两路挂不同的输入，才不会有「换了字幕源却不重跑」的盲区。
-  // SRT 路只钉字幕快照。转写路钉 job.json 和源视频字节（大文件是 size+mtime）。
-  // 换路时丢掉另一路的 key，否则「视频改了」会把一份只解析 SRT 的结果永远标脏。
+  // 输入登记：两路挂**不同**的输入，否则「换了字幕源却不重跑」会成为盲区。
+  //   SRT 路 → 只钉 source.srt 快照；
+  //   转写路 → 钉 job.json（它记着 video_path）和源视频字节（大文件取 size+mtime）。
+  // 换路时丢掉另一路的 key（见下面 finishStep 的 dropKeys），否则「视频改了」会把一份
+  // 只解析 SRT 的结果永远标脏。
   const inputs = raw !== null
     ? [await inputRef(root, "source.srt", `${owner}/source.srt`)]
     : [

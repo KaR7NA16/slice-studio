@@ -15,7 +15,6 @@ import type {
   NewClip,
   NewJob,
   OverlayFile,
-  S01AiFile,
   S03View,
   S04Params,
   SentencesFile,
@@ -39,6 +38,7 @@ import { survey } from "./survey.ts";
 import { variantsView } from "./variants.ts";
 import { moodDomain } from "../steps/s04.ts";
 import { parseSrt } from "../steps/s00.ts";
+import { readS01Ai } from "../steps/s01.ts";
 import { finishStep, inputRef, removeQuietly, setActiveVariant } from "../steps/lib.ts";
 
 const ROOT = path.resolve(process.argv[2] ?? process.cwd());
@@ -281,7 +281,7 @@ async function s01View(res: ServerResponse, jobId: string): Promise<void> {
   if (!(await readJson<JobFile>(path.join(ROOT, "work", "jobs", jobId, "job.json")))) {
     return sendErr(res, 404, `任务不存在：${jobId}`);
   }
-  const ai = await readJson<S01AiFile>(path.join(dir, "ai.json"));
+  const ai = await readS01Ai(ROOT, jobId);
   const cand = await readJson<CandidatesFile>(path.join(dir, "candidates.json"));
   sendJson(res, { ai, candidates: cand });
 }

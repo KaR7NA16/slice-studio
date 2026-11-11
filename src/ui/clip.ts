@@ -101,12 +101,13 @@ export async function viewClip(id: string, tab: string, rerender: () => void, st
         </div>
         <div class="card player-card">
           <video class="player" id="player" controls preload="metadata" src="/api/media/job/${encodeURIComponent(clip.job_id)}/video"></video>
+          <!-- 开关贴在播放器卡片里：它改的是播放行为（跳不跳已删句），不是波形的显示。
+               片长与段数跟着波形走，挂在下面那行标题的 .meta 上。 -->
+          <div class="preview-bar">
+            <label title="开启后播放会自动跳过已删的句子"><input type="checkbox" id="preview-cut" checked /> 成片预览</label>
+          </div>
         </div>
-        <div class="preview-bar">
-          <label><input type="checkbox" id="preview-cut" checked /> 成片预览</label>
-          <span class="hint" id="preview-len"></span>
-        </div>
-        <div class="section-title" id="s03-wave-title"></div>
+        <div class="section-title" id="s03-wave-title"><span id="s03-wave-label"></span><span class="meta" id="preview-len"></span></div>
         <div class="card wave-card" id="s03-wave-box" hidden><canvas id="s03-wave" height="120"></canvas></div>
         <div class="section-title" id="s03-info"></div>
         <div class="card sents" id="s03-sents" role="listbox" aria-label="句流"></div>
@@ -423,10 +424,12 @@ async function wireS03(
   // 而句子的 start/end 是**视频绝对秒**。不换算的话波形与句子边界整体错位 clip.start 秒，
   // 而错位后的波形看起来照样「像那么回事」——这种错最难发现。
   const waveBox = document.getElementById("s03-wave-box")!;
-  const waveTitle = document.getElementById("s03-wave-title")!;
+  // 只写里层的 label，不写整个标题节点：片长/段数（#preview-len）是同一个标题行的 .meta，
+  // 往父节点写 textContent 会把它一起抹掉。
+  const waveLabel = document.getElementById("s03-wave-label")!;
   if (byId.get("s02")!.present.includes("vocals.wav")) {
     waveBox.hidden = false;
-    waveTitle.textContent = "波形气口（灰 = 成片里会被删掉，点一下跳播放器）";
+    waveLabel.textContent = "波形气口（灰 = 成片里会被删掉，点一下跳播放器）";
     const waveUrl = mediaUrl(id, "s02", "vocals.wav");
     paintWave = async () => {
       await drawWave(document.getElementById("s03-wave") as HTMLCanvasElement, waveUrl, {
@@ -449,12 +452,12 @@ async function wireS03(
     } catch {
       paintWave = null;
       waveBox.hidden = true;
-      waveTitle.textContent = "波形气口（读取失败——s02 的人声轨取不到）";
+      waveLabel.textContent = "波形气口（读取失败——s02 的人声轨取不到）";
     }
   } else {
     // 不重复写「去跑 s02」：面板顶部的依赖提示已经带了入口，同一屏两个一模一样的链接
     // 会让人以为是两种不同的缺口。这里只回答「为什么这块是空的」。
-    waveTitle.textContent = "波形气口";
+    waveLabel.textContent = "波形气口";
     waveBox.innerHTML = `<div class="empty-hint">波形来自 s02 的人声轨，本步不依赖它——所以这里先空着</div>`;
     waveBox.hidden = false;
   }

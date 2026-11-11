@@ -88,6 +88,7 @@ export async function runS01(root: string, owner: string, runId: string): Promis
   return `AI 给出 ${kept.length} 条高光${dropped > 0 ? `（另有 ${dropped} 条越界已丢弃）` : ""}`;
 }
 
-// 当前 AI 提案（只读，供 s01 工作空间）
+// 当前 AI 提案（只读）。服务端的 s01 视图读它，路径口径只写在这里一处——
+// 之前在 main.ts 里另写了一遍 path.join(...)，两处任一处改了目录结构就静默读空。
 export const readS01Ai = (root: string, jobId: string): Promise<S01AiFile | null> =>
   readJson<S01AiFile>(path.join(stepDir(root, `jobs/${jobId}`, "s01"), "ai.json"));

@@ -4,7 +4,8 @@
 //  附带：懒依赖诚实（未配 LLM 时 draft 据实报错 b59）、未实现步据实拒绝
 // 说明：本机未配 LLM，ai.json 由本脚本手写以模拟 AI 产物（仅此一处），
 //       用于验证「人工 > AI」合并优先级；draft 的真实 LLM 通路待配置后可用。
-// 只为副作用导入（mkdir work/_scratch、把 TEMP/TMP 重定向到项目盘），本文件不用 SCRATCH。
+// 只为副作用导入（改写 TEMP/TMP 到项目盘上的 work/_scratch，供子进程用），本文件不用 SCRATCH。
+// 本文件的夹具根 VROOT 走 SYSTEM_TEMP 并在 .finally 里整棵删掉，不进项目盘。
 import { SYSTEM_TEMP } from "./scratchdir.ts";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";

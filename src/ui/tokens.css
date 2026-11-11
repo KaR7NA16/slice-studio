@@ -128,7 +128,7 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-.num, time, .sha { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.num, time { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
 ::selection { background: var(--border-strong); }
 

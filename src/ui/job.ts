@@ -292,7 +292,8 @@ export async function viewJob(id: string, rerender: () => void, stale?: () => bo
     });
   });
 
-  const s01Status = document.getElementById("s01-status")!;  if (!llm.ok) {
+  const s01Status = document.getElementById("s01-status")!;
+  if (!llm.ok) {
     s01Status.classList.add("err");
     s01Status.innerHTML = `${esc(llm.reason ?? "")} <a class="link" href="#/settings">去设置</a>`;
   }

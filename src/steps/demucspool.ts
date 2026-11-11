@@ -99,6 +99,21 @@ export async function demucsSeparate(
   task: { id: string; audio: string; out_dir: string },
 ): Promise<DemucsResult> {
   const port = await ensureBroker(root);
+  try {
+    return await talk(port, task);
+  } catch (e) {
+    // 连不上 / 连上就断，最可能的原因是 pid 被系统**复用**：data/workers/demucs.json 里那个
+    // pid 现在归了别的进程，`process.kill(pid, 0)` 于是说「活着」，我们便一直去连一个死端口。
+    // 不清记录的话，这个数据根上的 s02 会永久失败，且报错只说「连不上」——用户重装都没用。
+    // 清掉再拉一次：真正的故障（模型加载失败等）会在第二次照样失败，错误不会因此被吞。
+    if (!(e instanceof Error) || !/连不上|断开|中断/.test(e.message)) throw e;
+    await unlink(infoPath(root)).catch(() => undefined);
+    await unlink(lockPath(root)).catch(() => undefined);
+    return await talk(await ensureBroker(root), task);
+  }
+}
+
+async function talk(port: number, task: { id: string; audio: string; out_dir: string }): Promise<DemucsResult> {
   return await new Promise((resolve, reject) => {
     const sock = createConnection({ host: "127.0.0.1", port });
     const rl = createInterface({ input: sock });
@@ -112,6 +127,10 @@ export async function demucsSeparate(
     };
     sock.on("error", (e) => finish(() => reject(new Error(`连不上 demucs broker：${e.message}`))));
     sock.on("close", () => finish(() => reject(new Error("demucs broker 在返回结果前断开"))));
+    // readline 会把 input 的 error 转发成 **Interface 自己的 'error' 事件**，而那个事件没人接
+    // 就是 uncaughtException —— 一次「broker 挂了」会变成整个进程消失，连失败原因都留不下。
+    // 实测：broker 连不上时，进程崩在 node:internal/readline/interface，只剩一句 ECONNREFUSED。
+    rl.on("error", () => finish(() => reject(new Error("demucs broker 连接中断（读端出错）"))));
     rl.on("line", (line) => {
       let ev: { type?: string; message?: string; vocals?: string; no_vocals?: string; seconds?: number };
       try {

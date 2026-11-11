@@ -301,6 +301,65 @@ async function main(): Promise<void> {
     progEvents.length ? `${progEvents.at(-1)!.done_sec} / ${progEvents.at(-1)!.total_sec}` : "(无进度)",
   );
 
+  // A5. 换字幕源：已有任务不该只能靠「重建任务」换字幕（P2-2）。
+  //     语义是**换一份源**，不是同一份重算——所以 AI 候选要清、人工删留按内容哈希自然进孤儿。
+  //     选中转写出来的那个任务来换：它原本没有 source.srt，正好证明「没有也能补挂」。
+  const swapSrt = path.join(VROOT, "swap.srt");
+  const SWAP_SRT = `1
+00:00:00,000 --> 00:00:02,000
+换成的新字幕第一句
+
+2
+00:00:02,500 --> 00:00:04,500
+换成的新字幕第二句
+
+3
+00:00:05,000 --> 00:00:07,000
+换成的新字幕第三句
+`;
+  await writeFile(swapSrt, SWAP_SRT, "utf8");
+  // 先造一条 AI 候选：换源后它对应的句子已经不存在，留着就是解释不了来历的孤儿
+  const swapAiPath = path.join(VROOT, "work", "jobs", asrJob, "s01", "ai.json");
+  await mkdir(path.dirname(swapAiPath), { recursive: true });
+  await writeJsonAtomic(swapAiPath, {
+    schema: 1,
+    model: "stub",
+    at: new Date().toISOString(),
+    decisions: [{ id: "deadbeefdead", keep: true, reason: "旧句子的候选" }],
+  });
+  check("前置：造出一条旧 AI 候选", await exists(swapAiPath), swapAiPath);
+  const swapRes = await api<{ ok: boolean; sentences: number; ai_cleared: boolean }>(
+    `/api/jobs/${asrJob}/subtitle`,
+    { method: "POST", body: JSON.stringify({ srt_path: swapSrt }) },
+  );
+  check("换源接口报出解析到的句数", swapRes.ok === true && swapRes.sentences === 3, JSON.stringify(swapRes));
+  check(
+    "source.srt 换成了新内容",
+    (await readFile(path.join(VROOT, "work", "jobs", asrJob, "source.srt"), "utf8")) === SWAP_SRT,
+  );
+  check("AI 候选被清掉（换源后它对应不到任何句子）", !(await exists(swapAiPath)), swapAiPath);
+  const rSwap = await runAndWait(`jobs/${asrJob}`, "s00", null);
+  check("换源后重建走解析路径（不再转写）", rSwap.status === "done" && rSwap.message.includes("解析 3 句"), rSwap.message);
+  const swapSent = await api<SentencesFile>(`/api/jobs/${asrJob}/sentences`);
+  check(
+    "句子真的换成了新字幕的内容",
+    swapSent.sentences.length === 3 && swapSent.sentences[0]!.text.includes("换成的新字幕"),
+    swapSent.sentences.map((s) => s.text).join(" / "),
+  );
+  // 错误分支：换上一份解析不出东西的字幕，等于把这个任务改成「必然失败」，
+  // 而用户只会以为「选错文件了」。宁可当场拒。
+  const emptySrt = path.join(VROOT, "empty-swap.srt");
+  await writeFile(emptySrt, "没有时间码的一行字\n", "utf8");
+  const postSub = (job: string, srt: string): Promise<Response> =>
+    fetch(`http://127.0.0.1:${port}/api/jobs/${job}/subtitle`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ srt_path: srt }),
+    });
+  check("解析不出句子的字幕被拒（400）", (await postSub(asrJob, emptySrt)).status === 400);
+  check("不存在的字幕路径被拒（400）", (await postSub(asrJob, path.join(VROOT, "nope.srt"))).status === 400);
+  check("不存在的任务被拒（404）", (await postSub("ghost-job", swapSrt)).status === 404);
+
   // B. 手动建片段（含 ffprobe 真实探测 fps）
   const { id: clipId } = await api<{ id: string }>("/api/clips", {
     method: "POST",
@@ -1172,6 +1231,30 @@ async function main(): Promise<void> {
       await rename(path.join(s02dir, "no_vocals.wav"), path.join(s02dir, "_gone_no_vocals.wav"));
       const gone = (await s02State()).status;
       check("删掉一个契约产物 → missing", gone === "missing", gone);
+
+      // 自愈：pid 被系统**复用**后，data/workers/demucs.json 里的 pid 归了别的进程，
+      // process.kill(pid, 0) 于是说「活着」，客户端便一直去连一个没人听的端口——
+      // 不清记录的话，这个数据根上的 s02 会永久失败，而报错只说「连不上」。
+      // 用「当前脚本进程的 pid + 一个刚关掉的端口」精确复现这个现场：pid 真的活着，端口真的没人听。
+      const tmpSrv = createServer();
+      await new Promise<void>((r) => tmpSrv.listen(0, "127.0.0.1", () => r()));
+      const deadPort = (tmpSrv.address() as { port: number }).port;
+      await new Promise<void>((r) => tmpSrv.close(() => r()));
+      await writeJsonAtomic(path.join(ROOT, "data", "workers", "demucs.json"), {
+        pid: process.pid,
+        port: deadPort,
+        ready: 1,
+        tasks: 0,
+        last_peak: 0,
+      });
+      // 抛错要变成**红**而不是中断：中断的输出是「N passed / 0 failed」，比红更容易被当成通过。
+      let msgHeal = "";
+      try {
+        msgHeal = await runS02(ROOT, `clips/${s02Clip}`, "rS02Heal");
+      } catch (e) {
+        msgHeal = `抛错：${e instanceof Error ? e.message : String(e)}`;
+      }
+      check("pid 被复用（记录活着、端口没人听）时能自愈重拉 broker", msgHeal.includes("分离出"), msgHeal);
     } finally {
       // 夹具清理：失败必须**留痕并带出错误码**。原先这里是 `.catch(() => {})` —— 静默吞掉，
       // 结果 work/ 悄悄堆了 37 个残留文件而脚本每次都报「全绿」。

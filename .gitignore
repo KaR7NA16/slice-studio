@@ -1,0 +1,52 @@
+# 仓库只收源码、判据脚本和小夹具。
+# 下面每条都对应磁盘上实测过的目录或产物。
+
+# 依赖与构建产物，npm install / npm run build 可重建
+node_modules/
+dist/
+
+# 本机配置，含密钥。模板 config.example.json 入库
+config.json
+
+# 运行时数据：任务、索引、试跑产物（含 work/_media 的样片）
+data/
+work/
+
+# 内置运行时，换机器另备
+tools/node/
+tools/ffmpeg/
+tools/python/
+
+# 模型权重（models/asr、models/demucs）
+models/
+
+# 曲库。版权不在本项目
+assets/
+
+# 启动器编译结果。源码在 launcher/Launcher.cs
+/slice-studio.exe
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 会话笔记，含本机路径
+.workbuddy/
+.workbuddy-ai/
+
+# 文档留在本机，不进远端
+docs/
+
+# 后缀兜底：权重、音频缓存、日志、系统杂文件。
+# 不写 *.mp4：tools/fixtures/asr-sample.mp4 是已入库夹具，大样片由 work/ 挡住。
+# 不写 *.json：package.json、tsconfig.json、config.example.json 要入库，运行时 JSON 在 data/ 与 work/。
+# 不写 *.md，也不忽略 tools/fixtures/。docs/ 整目录留在本机。
+*.onnx
+*.th
+*.pt
+*.pth
+*.safetensors
+*.wav
+*.log
+Thumbs.db
+.DS_Store

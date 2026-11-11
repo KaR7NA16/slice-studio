@@ -266,6 +266,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
    放进去会让读屏把「已用 0:03 / 0:04」一句句念出来（见 lib.ts runAndPoll ④）。
    tabular-nums 是必须的：等宽数字才不会让整行随秒数左右抖动。 */
 .elapsed { margin-left: var(--pad-1); font-size: var(--fs-sm); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+/* 取消按钮紧跟在已用时后面，与状态位本身分开一点，免得读成一个整体 */
+.elapsed + .minibtn { margin-left: var(--pad-2); }
 
 .file-chip {
   display: inline-flex; align-items: center; gap: 6px; min-width: 0;

@@ -1,6 +1,6 @@
 // run 触发与心跳（b53）：一步一子进程，记录落 data/runs/<id>.json。
 // 心跳 = updated_at（子进程每次进展都刷新）；失联判定在读侧现算（b43：盘上是事实，状态是派生）。
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { STEP_BY_ID, stepsFor } from "../shared/steps.ts";
@@ -21,6 +21,9 @@ export class RunBusyError extends Error {
 }
 
 const inflight = new Set<string>();
+// run.id → 子进程。取消时要用 pid 杀**整棵**进程树，光有 inflight 的 key 不够。
+// 进程退出时删掉：服务重启后这张表是空的，此时取消只能改记录、杀不到进程——如实报，不假装。
+const procs = new Map<string, ReturnType<typeof spawn>>();
 // 代码目录 ≠ 数据根：root 是用户数据根，步执行体在本仓库里（按本文件位置推导）
 const CODE_ROOT = path.resolve(import.meta.dirname, "..", "..");
 
@@ -122,8 +125,11 @@ export async function startRun(root: string, owner: string, step: string, mode: 
   const child = spawn(
     process.execPath,
     [path.join(CODE_ROOT, "src", "steps", "run.ts"), root, owner, step, mode ?? "", rec.id],
-    { stdio: ["ignore", "pipe", "pipe"] },
+    // POSIX 下必须 detached 才能自成进程组，取消时用负 pid 一次带走整棵树；
+    // Windows 的 detached 是「新控制台窗口」，语义不同，那边靠 taskkill /T。
+    { stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" },
   );
+  procs.set(rec.id, child);
   let tail = "";
   const collect = (b: Buffer): void => {
     tail = (tail + b.toString()).slice(-8192);
@@ -133,8 +139,12 @@ export async function startRun(root: string, owner: string, step: string, mode: 
   // 进程级失败兜底：步代码自己会写 error；只有「根本没跑起来/崩了」才由这里据实补记。
   // 跑成了才推自动链。失败不推——上游没产出，下游的严格门本来也会拦住，
   // 而且「失败后还自动往下跑」会让人以为链条是通的。
-    child.on("error", release);
+    child.on("error", () => {
+      procs.delete(rec.id);
+      release();
+    });
   child.on("exit", (code) => {
+    procs.delete(rec.id);
     release();
     void (async () => {
       // 有输出才落日志：空输出不产生空文件（多数步是静默的）
@@ -177,6 +187,60 @@ export async function startRun(root: string, owner: string, step: string, mode: 
     release();
     throw e;
   }
+}
+
+// 杀进程树，不是杀进程。链路是三层：服务 → run.ts → ffmpeg / python。
+// child.kill() 只带走中间那层，ffmpeg 会变孤儿继续吃 CPU、继续占着资源槽——
+// 那种「按钮点了、记录也显示已取消、机器还在满负荷」的状态比不做取消更糟。
+// 导出是为了能被单独验证：这是整个取消功能里唯一「点了没反应也看不出来」的部分。
+export function killTree(pid: number): boolean {
+  if (process.platform === "win32") {
+    const r = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+    return r.status === 0;
+  }
+  try {
+    process.kill(-pid, "SIGTERM"); // 负号 = 整个进程组（spawn 时已 detached）
+    return true;
+  } catch {
+    try {
+      process.kill(pid, "SIGTERM");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+// 取消一次运行。返回落盘后的记录；run 不存在返回 null。
+export async function cancelRun(root: string, id: string): Promise<RunRecord | null> {
+  const file = runFile(root, id);
+  const rec = await readJson<RunRecord>(file);
+  if (!rec) return null;
+  // 已经结束的不报错，如实返回现状——「取消失败」和「本来就没在跑」是两件事
+  if (rec.status !== "running") return rec;
+  const now = new Date().toISOString();
+  // 先落盘再杀。exit 回调只在 status 仍是 running 时补记 error，
+  // 先写 cancelled 才能保证它不把一次主动取消改写成「进程异常退出（code 1）」。
+  const next: RunRecord = {
+    ...rec,
+    status: "cancelled",
+    message: "已取消",
+    updated_at: now,
+    finished_at: now,
+  };
+  await writeJsonAtomic(file, next);
+  const child = procs.get(id);
+  if (!child?.pid) {
+    // 服务重启过：盘上还写着 running，但本进程没有它的 pid。改记录已尽力，杀不到。
+    const honest: RunRecord = { ...next, message: "已取消（进程句柄已丢，可能仍在运行）" };
+    await writeJsonAtomic(file, honest);
+    return honest;
+  }
+  if (killTree(child.pid)) return next;
+  // 杀不掉就如实说。把「记录已取消」当成「任务真的停了」，是这里最容易犯的错。
+  const failed: RunRecord = { ...next, message: "已取消，但进程未能终止（仍在占用资源）" };
+  await writeJsonAtomic(file, failed);
+  return failed;
 }
 
 export async function getRun(root: string, id: string): Promise<RunRecord | null> {

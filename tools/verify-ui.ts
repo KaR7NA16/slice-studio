@@ -1780,6 +1780,85 @@ try {
   await page.unroute("**/api/runs/r-stub2");
   await page.unroute("**/api/jobs/ui-j1/sentences");
 
+  // ============ Q. 取消长任务：主动停下不是故障 ============
+  // 取消是真杀进程（服务端 procs + killTree），那部分在 cancelbiz 里对真实三层进程树验过。
+  // 这里盯的是界面这一侧的三件事：按钮在不在、请求打的是不是 cancel、结果有没有被报成「失败」。
+  console.log("[Q] 取消长任务：按钮 / 请求 / 不许报成失败");
+  const cancelReq: { method: string; url: string }[] = [];
+  const cancelledRun = {
+    ...stubRun("r-cancel", "running", new Date().toISOString()),
+    status: "cancelled",
+    message: "已取消",
+    finished_at: new Date().toISOString(),
+  };
+  await page.goto(`${base}/#/job/ui-j1`);
+  await page.waitForSelector("#job-sents .sent", { timeout: 8000 });
+  await page.route("**/api/run", (route) => route.fulfill({ json: stubRun("r-cancel", "running", new Date().toISOString()) }));
+  // 一条正则管住 /api/runs/r-cancel 与 /api/runs/r-cancel/cancel：分开注册两条 glob 会踩
+  // 「哪条优先」的匹配顺序问题，而那个顺序不该成为判据的一部分。
+  const cancelRoute = /\/api\/runs\/r-cancel(\/cancel)?$/;
+  // 桩必须像真服务一样**记住**状态：取消之后再来的心跳也必须是 cancelled。
+  // 只按「这次请求是不是 /cancel」回不同的东西，会让下一次心跳又变回 running，
+  // 界面于是永远等不到收尾（第一版就是这么挂的，而且挂得很像产品 bug）。
+  let cancelCalled = false;
+  await page.route(cancelRoute, (route) => {
+    const req = route.request();
+    cancelReq.push({ method: req.method(), url: req.url() });
+    if (req.url().endsWith("/cancel")) cancelCalled = true;
+    return route.fulfill({
+      json: cancelCalled ? cancelledRun : stubRun("r-cancel", "running", new Date().toISOString()),
+    });
+  });
+  await page.click("#run-s00");
+  await page.waitForSelector(".modal", { timeout: 10000 });
+  await page.click('.modal [data-act="ok"]');
+  await page.waitForSelector(".elapsed", { timeout: 8000 });
+  const liveRegion = await page.evaluate(() => {
+    const el = document.getElementById("run-status");
+    const btn = Array.from(document.querySelectorAll("button")).find((b) => (b.textContent ?? "").trim() === "取消");
+    return { hasBtn: Boolean(btn), insideLive: el?.contains(btn ?? null) ?? false };
+  });
+  check("跑起来后给出「取消」按钮", liveRegion.hasBtn, true);
+  // 取消按钮跑完就撤：若它挂在 live region 里，读屏会先念「取消 按钮」再念它消失，
+  // 而真正该播报的是「已取消」那一句。
+  check("取消按钮与已用时一样挂在 live region 之外", liveRegion.insideLive, false);
+
+  await page.evaluate(() => {
+    const btn = Array.from(document.querySelectorAll("button")).find((b) => (b.textContent ?? "").trim() === "取消");
+    (btn as HTMLButtonElement | undefined)?.click();
+  });
+  await page.waitForTimeout(1400); // 至少走一轮 800ms 心跳，确认它自己收尾
+  const afterCancel = await page.evaluate(() => {
+    const el = document.getElementById("run-status");
+    return {
+      text: el?.textContent ?? "",
+      role: el?.getAttribute("role") ?? "",
+      cls: el?.className ?? "",
+      elapsed: document.querySelectorAll(".elapsed").length,
+      btn: Array.from(document.querySelectorAll("button")).filter((b) => (b.textContent ?? "").trim().startsWith("取消")).length,
+    };
+  });
+  const cancelHits = cancelReq.filter((r) => r.url.endsWith("/cancel"));
+  check(`取消打到 POST /api/runs/:id/cancel（实测 ${cancelHits.length} 次 ${cancelHits[0]?.method ?? "-"}）`,
+    cancelHits.length === 1 && cancelHits[0]!.method === "POST", true);
+  check(`取消后状态位说「已取消」（实测「${afterCancel.text}」）`, afterCancel.text.trim() === "已取消", true);
+  // 主动停下不是故障：报成「失败」会让用户以为是自己弄坏了什么
+  check("取消不报成失败", afterCancel.text.includes("失败"), false);
+  check(`取消不是错误档（role=${afterCancel.role}，class 含 err=${afterCancel.cls.includes("err") ? "是" : "否"}）`,
+    afterCancel.role !== "alert" && !afterCancel.cls.includes("err"), true);
+  // 轮询必须真的停下：否则已用时与取消按钮会一直留着，看上去还在跑
+  check(`取消后已用时与取消按钮都撤走（实测 elapsed=${afterCancel.elapsed} btn=${afterCancel.btn}）`,
+    afterCancel.elapsed === 0 && afterCancel.btn === 0, true);
+
+  // 服务端这一侧的语义（真打，不走 mock）：不存在的 run 是 404，不是 500，
+  // 也证明 cancel 路由没被 GET /api/runs/:id 那条吃掉
+  const missCancel = await fetch(`${base}/api/runs/nope-xx/cancel`, { method: "POST" });
+  check(`取消不存在的 run 返回 404（实测 ${missCancel.status}）`, missCancel.status, 404);
+  await page.unroute("**/api/run");
+  await page.unroute(cancelRoute);
+  await page.goto(`${base}/#/`);
+  await page.waitForSelector("#nj-go", { timeout: 8000 });
+
   check("全程没有出现原生 alert/confirm/prompt", nativeDialogs, 0);
 
   // ---- 截图：布局塌陷、圆点隐形这类问题只有看图才发现 ----

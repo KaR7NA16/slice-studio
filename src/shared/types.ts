@@ -298,7 +298,9 @@ export interface RunRecord {
   owner: string; // "jobs/<id>" | "clips/<id>"
   step: string;
   mode: string | null;
-  status: "running" | "done" | "error";
+  // cancelled 必须与 error 分开：用户主动停下的不是故障，不该进「失败」统计，
+  // 也不该在下游严格门里被当成「上一步出错」。
+  status: "running" | "done" | "error" | "cancelled";
   started_at: string;
   updated_at: string;
   finished_at: string | null;

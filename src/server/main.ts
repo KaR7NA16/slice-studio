@@ -29,7 +29,7 @@ import { llmModels, llmTest, putLlm } from "./llmroute.ts";
 import { streamMedia } from "./media.ts";
 import { EMPTY_OVERLAY, mergeDecisions } from "./overrides.ts";
 import { preview } from "./preview.ts";
-import { getRun, listRuns, RunBusyError, startRun } from "./runs.ts";
+import { cancelRun, getRun, listRuns, RunBusyError, startRun } from "./runs.ts";
 import { ingestLibrary } from "./ingest.ts";
 import { listDir, statPath } from "./fsbrowse.ts";
 import { removeJob, safeJobId, safeOwner, updateCard } from "./jobcard.ts";
@@ -484,6 +484,10 @@ const server = createServer(async (req, res) => {
     if ((m = url.match(/^\/api\/clips\/([^/]+)\/s03$/))) return await s03View(res, m[1]!);
     if ((m = url.match(/^\/api\/clips\/([^/]+)\/s03\/overlay$/)) && req.method === "POST") {
       return await writeOverlay(res, req, m[1]!);
+    }
+    if ((m = url.match(/^\/api\/runs\/([^/]+)\/cancel$/)) && req.method === "POST") {
+      const rec = await cancelRun(ROOT, m[1]!);
+      return rec ? sendJson(res, rec) : sendErr(res, 404, `run 不存在：${m[1]}`);
     }
     if ((m = url.match(/^\/api\/runs\/([^/]+)$/))) {
       const rec = await getRun(ROOT, m[1]!);

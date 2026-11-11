@@ -196,6 +196,27 @@ export async function runAndPoll(
     elapsedEl.textContent = `已用 ${mmss(Date.now() - startedAt)}`;
   };
   paint();
+  // 取消按钮也放在 live region 之外：它跑完就撤，若被播报，读屏用户会听到
+  // 「取消 按钮」然后片刻又听到它消失——而真正该播报的是「已取消」那句话。
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.className = "minibtn";
+  cancelBtn.textContent = "取消";
+  statusEl.insertAdjacentElement("afterend", cancelBtn);
+  cancelBtn.addEventListener("click", async () => {
+    cancelBtn.disabled = true;
+    cancelBtn.textContent = "取消中…";
+    try {
+      const r = await post<RunRecord>(`/api/runs/${encodeURIComponent(rec.id)}/cancel`, {});
+      // 服务端会如实说明「进程未能终止」这类情况，照它的话显示，不自己编一句「已取消」
+      const text = r.message || "已取消";
+      setMsg(statusEl, text, text.startsWith("已取消") ? "info" : "err");
+    } catch (e) {
+      cancelBtn.disabled = false;
+      cancelBtn.textContent = "取消";
+      setMsg(statusEl, `取消失败：${e instanceof Error ? e.message : String(e)}`, "err");
+    }
+  });
   try {
     let lost = 0;
     for (;;) {
@@ -220,6 +241,11 @@ export async function runAndPoll(
           setMsg(statusEl, `完成：${cur.message}`, "ok");
           return true;
         }
+        // 主动取消不是故障：报成「失败」会让用户以为是自己弄坏了什么
+        if (cur.status === "cancelled") {
+          setMsg(statusEl, cur.message || "已取消", "info");
+          return false;
+        }
         setMsg(statusEl, `失败：${cur.error ?? cur.message}`, "err");
         return false;
       }
@@ -227,6 +253,7 @@ export async function runAndPoll(
     }
   } finally {
     elapsedEl.remove();
+    cancelBtn.remove();
   }
 }
 

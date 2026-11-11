@@ -4,7 +4,8 @@
 //  附带：懒依赖诚实（未配 LLM 时 draft 据实报错 b59）、未实现步据实拒绝
 // 说明：本机未配 LLM，ai.json 由本脚本手写以模拟 AI 产物（仅此一处），
 //       用于验证「人工 > AI」合并优先级；draft 的真实 LLM 通路待配置后可用。
-import { SCRATCH } from "./scratchdir.ts";
+// 只为副作用导入（mkdir work/_scratch、把 TEMP/TMP 重定向到项目盘），本文件不用 SCRATCH。
+import { SYSTEM_TEMP } from "./scratchdir.ts";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readFile, rename, stat, writeFile } from "node:fs/promises";
@@ -46,7 +47,9 @@ const ROOT = path.resolve(import.meta.dirname, "..");
 // 每次运行用唯一素材根：clip id 由 job/start/end/title 哈希稳定复现，固定名根上残留的
 // s04 run 会被 /api/runs 重新读到，把「档位=人工时不自动跑」读成假红（2026-11-09 实测）。
 // 唯一根让「先清旧根」不再必要，也就绕开了删除守卫的 turn 级配额。
-const VROOT = await mkdtemp(path.join(SCRATCH, "slice-verify2-"));
+// 建在**系统临时目录**而不是项目盘 work/_scratch：这份素材根是一次性的（收尾会删），
+// 放项目盘的话任何一次中断都会永久留 1.8MB，堆起来就是历史那 8 份残留。
+const VROOT = await mkdtemp(path.join(SYSTEM_TEMP, "slice-verify2-"));
 const FFMPEG = path.join(ROOT, "tools", "ffmpeg", "ffmpeg.exe");
 const FFPROBE = path.join(ROOT, "tools", "ffmpeg", "ffprobe.exe");
 const execFileP = promisify(execFile);
@@ -200,6 +203,36 @@ async function main(): Promise<void> {
   const r1b = await runAndWait(`jobs/${jobId}`, "s00", null);
   check("重跑 s00 成功（走 SRT 路径）", r1b.status === "done" && r1b.message.includes("8 句"), r1b.message);
   check("上次中断留下的 _asr 临时目录被清掉", !(await exists(asrLeftover)), asrLeftover);
+
+  // A3. s00 的 **ASR 路径**（不带 SRT）——b2「SRT 优先、ASR 兜底」的另一半。
+  //    在此之前所有判据都带 srt 建任务，走的一直是解析分支，转写分支只有手工验证覆盖过。
+  //    夹具是 tools/fixtures/asr-sample.mp4：从真实讲解视频裁的 10s（320x180、单声道 16k、97KB），
+  //    压缩后仍能被 Paraformer 识别出 4 句中文。入库而不是现场合成——现场合成只能造正弦波，
+  //    转写路径「能跑」但「识别不出东西」等于没测。
+  //    依赖本机 models/asr 权重（不进版本库，随绿色目录分发）；权重缺失时这条会如实变红而不是跳过。
+  const asrVideo = path.join(ROOT, "tools", "fixtures", "asr-sample.mp4");
+  check("前置：ASR 夹具存在（缺了就是夹具没入库）", await exists(asrVideo), asrVideo);
+  const { id: asrJob } = await api<{ id: string }>("/api/jobs", {
+    method: "POST",
+    body: JSON.stringify({ video_path: asrVideo, srt_path: null }),
+  });
+  const rAsr = await runAndWait(`jobs/${asrJob}`, "s00", null);
+  check("无 SRT 时 s00 走转写并成功", rAsr.status === "done", rAsr.message);
+  // 文案本身就区分了两条路（「本地转写 N 句」vs「解析 N 句」），所以它能证明走的是哪一支，
+  // 不是只看「没报错」——没报错也可能是走了 SRT 分支而 srt 恰好不存在。
+  check("确认走的是转写分支", rAsr.message.includes("本地转写"), rAsr.message);
+  const asrSent = await api<SentencesFile>(`/api/jobs/${asrJob}/sentences`);
+  check("转写真的出了句子（不是空跑通过）", asrSent.sentences.length >= 2, String(asrSent.sentences.length));
+  // 时间码必须落在音频真实时长内：出句但时间码越界，等于 VAD 切分或偏移有问题。
+  // 前面必须显式带 length > 0——`[].every(...)` 恒为 true，零句时这条会假装通过。
+  // 注入「转写零句静默成功」实测过这一点：不加上限时只有「出了句子」那条红，这条仍是绿的。
+  check(
+    "转写时间码落在音频时长内（0 ≤ t ≤ 10.5s）",
+    asrSent.sentences.length > 0 && asrSent.sentences.every((s) => s.start >= 0 && s.end <= 10.5),
+    asrSent.sentences.map((s) => `${s.start}-${s.end}`).join(",") || "(无句子)",
+  );
+  check("转写路径跑完自己的临时件也清掉了", !(await exists(path.join(VROOT, "work", "jobs", asrJob, "_asr"))));
+  check("转写作了缓存并登记 job.srt", await exists(path.join(VROOT, "work", "jobs", asrJob, "s00", "job.srt")));
 
   // B. 手动建片段（含 ffprobe 真实探测 fps）
   const { id: clipId } = await api<{ id: string }>("/api/clips", {
@@ -1587,6 +1620,12 @@ main()
     console.error(`（中断前已跑：${passed} PASS / ${failed} FAIL）`);
     process.exitCode = 1;
   })
-  .finally(() => {
+  .finally(async () => {
     server?.kill();
+    // 收尾必须删 VROOT：之前只有 server.kill()，于是每跑一次就在 work/_scratch 永久留一份
+    // 约 1.8MB 的素材根（2026-11-11 实测残留 8 份 / 14MB，就是「一跑一份地堆」的来源）。
+    // 清理失败只告警不抛——脚本已经跑完了，为了一句「删不掉」把成功退出改成失败退出，
+    // 只会让人误判成验证没过。
+    const e = await removeQuietly(VROOT);
+    if (e) console.log(`⚠️ 素材根未删除（${VROOT}）：${e}`);
   });

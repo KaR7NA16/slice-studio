@@ -2,7 +2,7 @@
   "name": "slice-studio",
   "version": "0.1.0",
   "private": true,
-  "description": "本地自托管的 AI 切片编辑器：六步流水线把中文口播视频切成短片，产物可查可改",
+  "description": "Local editor that cuts a Chinese spoken video into short clips.",
   "license": "MIT",
   "type": "module",
   "engines": {

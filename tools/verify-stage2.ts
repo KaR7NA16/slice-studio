@@ -187,6 +187,20 @@ async function main(): Promise<void> {
   const sentences = await api<SentencesFile>(`/api/jobs/${jobId}/sentences`);
   check("句流 8 句", sentences.sentences.length === 8);
 
+  // A2. 上次转写被中断留下的临时件，下一次跑 s00 要清掉。
+  //    取消是**整棵进程树被杀**，runS00 末尾那句 removeQuietly 跑不到，所以中断的 run
+  //    一定会留一份 jobDir/_asr（8 分钟音频约 15MB）。这里不真跑转写：造一份假的残留，
+  //    走 SRT 路径跑一次 s00，看它有没有被清——顺带证明「换源」也清，
+  //    只清转写路径的话换 SRT 这种场景就漏了。
+  const exists = (p: string): Promise<boolean> => stat(p).then(() => true).catch(() => false);
+  const asrLeftover = path.join(VROOT, "work", "jobs", jobId, "_asr");
+  await mkdir(asrLeftover, { recursive: true });
+  await writeFile(path.join(asrLeftover, "asr-16k.wav"), "dummy", "utf8");
+  check("前置：造出一份上次转写的残留", await exists(path.join(asrLeftover, "asr-16k.wav")));
+  const r1b = await runAndWait(`jobs/${jobId}`, "s00", null);
+  check("重跑 s00 成功（走 SRT 路径）", r1b.status === "done" && r1b.message.includes("8 句"), r1b.message);
+  check("上次中断留下的 _asr 临时目录被清掉", !(await exists(asrLeftover)), asrLeftover);
+
   // B. 手动建片段（含 ffprobe 真实探测 fps）
   const { id: clipId } = await api<{ id: string }>("/api/clips", {
     method: "POST",

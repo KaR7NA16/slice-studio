@@ -123,6 +123,14 @@ export async function runS00(root: string, owner: string, runId: string): Promis
   if (!job) throw new Error("job.json 不存在");
   const dir = stepDir(root, owner, "s00");
   await mkdir(dir, { recursive: true });
+  // 先清上次的转写临时件（`jobDir/_asr`，里面是 16k 单声道 wav）。
+  // 为什么在这里而不是在取消路径上：取消是**整棵进程树被杀**，本文件末尾那句
+  // removeQuietly 根本跑不到，所以中断的 run 一定留一份原文 wav（8 分钟约 15MB）。
+  // 放在 runS00 开头有两层好处：① 不用把「步内部临时件叫什么」泄漏给调度层（cancelRun）；
+  // ② 这次走 SRT 也会清掉上次转写留下的那份——只清转写路径就漏了这种换源场景。
+  // 并发上安全：同一 owner+step 起跑前有 inflight 与 hasRunning 两道守卫，不会误删在跑的。
+  const stale = await removeQuietly(path.join(jobDir, "_asr"));
+  if (stale) console.log(`  ⚠️ 上次转写临时件清理失败：${stale}`);
 
   const raw = await readFile(path.join(jobDir, "source.srt"), "utf8").catch(() => null);
   // 输入登记：SRT 路径挂 source.srt，ASR 路径挂 job.json（它钉住了 video_path）——

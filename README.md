@@ -24,8 +24,8 @@
 
 设计上的两条硬规矩：
 
-- **产物 vs 契约分开**。`step.json.outputs` 是「实际产出过什么」的并集，`artifacts[]` 是「必须有什
-  么」。可选产物（如 s03 的 `ai.json`）被删不算缺失，否则会把合法状态误报成 missing。
+- **产物 vs 契约分开**。`step.json.outputs` 是「实际产出过什么」的并集，`artifacts[]` 是「必须有什么」。
+  可选产物（如 s03 的 `ai.json`）被删不算缺失，否则会把合法状态误报成 missing。
 - **指纹驱动失效**。每步记输入的内容哈希（文件取 sha256，参数取值哈希），输入变了才标脏，逐层向下传播。
 
 ## 它不做什么
@@ -95,19 +95,22 @@ docs/        项目规划 / 交接文档 / 缺口与问题清单（决策记录�
 
 ```bash
 npm run check          # tsc --noEmit
-npm run verify         # 六组全跑（约 10 分钟）
+npm run verify         # 六组全跑，十几分钟
 ```
+
+> `verify` 会真跑 demucs 与 ffmpeg，**需要完整运行时**；只装了 node + ffmpeg 时先跑
+> `npm run verify:tokens`、`verify:stage1`、`verify:ui` 这三组（不碰 Python 侧）。
 
 | 脚本 | 条数 | 覆盖 |
 |---|---|---|
 | `verify-tokens.ts` | 16 | 设计令牌单源；色值/字号不许写死；class 与 CSS 双向对账 |
-| `verify-stage1.ts` | 29 | 读模型：empty / stale / missing / suspect 六态 |
+| `verify-stage1.ts` | 29 | 读模型六态：empty / error / stale / missing / ready / suspect |
 | `verify-stage2.ts` | 257 | 写路径全 HTTP 驱动：建任务→六步→换源→并发写→demucs 自愈 |
 | `verify-ui.ts` | 237 | 界面：真实点击、区块顺序、键盘可达、live region 文案 |
 | `verify-e2e.ts` | 27 | 端到端：一条素材从头走到成片 |
 | `verify-launch.ts` | 25 | 启动器：数据根选择、pyvenv.cfg 自愈、进程树收尾 |
 
-> 上表是 2026-11-11 的实跑记录。条数会随功能增长，以脚本自身输出为准。
+> 上表是 2026-11-12 的实跑记录。条数会随功能增长，以脚本自身输出为准。
 
 ## 依赖与许可
 

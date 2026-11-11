@@ -11,6 +11,7 @@
   "scripts": {
     "start": "node src/server/main.ts",
     "build": "vite build",
+    "pack": "node tools/pack.ts",
     "check": "tsc --noEmit",
     "verify": "npm run verify:tokens && npm run verify:stage1 && npm run verify:stage2 && npm run verify:ui && npm run verify:e2e && npm run verify:launch",
     "verify:tokens": "node tools/verify-tokens.ts",

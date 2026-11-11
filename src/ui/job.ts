@@ -19,13 +19,18 @@ const selection = new Map<string, { i: number | null; j: number | null }>();
 
 const RATES = [0.75, 1, 1.25, 1.5];
 
-export async function viewJob(id: string, rerender: () => void): Promise<void> {
+// 重跑字幕会牵动选区。这句话只在确认弹窗里出现——按下去那一刻它才决定行为，
+// 常驻在卡片里就变成每次都要读一遍的预言，而且不告诉人到底变没变。
+const S00_NOTE = "重跑会按当前字幕重建句子；句子变少时，已选的起止句会收回新范围内。";
+
+export async function viewJob(id: string, rerender: () => void, stale?: () => boolean): Promise<void> {
   const owner = `jobs/${id}`;
   const [survey, s01, llm] = await Promise.all([
     api<Survey>("/api/survey"),
     api<{ ai: S01AiFile | null; candidates: CandidatesFile | null }>(`/api/jobs/${encodeURIComponent(id)}/s01`),
     api<{ ok: boolean; model?: string; reason?: string }>("/api/llm"),
   ]);
+  if (stale?.()) return;
   const job = survey.jobs.find((j) => j.id === id);
   if (!job) return notFound(`任务不存在：${id}`);
   const byId = new Map(job.steps.map((s) => [s.step, s]));
@@ -35,6 +40,7 @@ export async function viewJob(id: string, rerender: () => void): Promise<void> {
   const sentences = s00.status === "ready" || s00.status === "suspect"
     ? await api<SentencesFile>(`/api/jobs/${encodeURIComponent(id)}/sentences`).catch(() => null)
     : null;
+  if (stale?.()) return;
 
   // 选区按当前句数夹紧：重跑字幕后句子变少，旧的 i/j 会越界（此前 refreshSel 直接抛错）
   const sel = selection.get(id) ?? { i: null as number | null, j: null as number | null };
@@ -51,6 +57,7 @@ export async function viewJob(id: string, rerender: () => void): Promise<void> {
 
   const tree = await api<VariantsView>(`/api/variants/${owner}`);
   const auto = await api<AutomationView>(`/api/automation/${owner}`);
+  if (stale?.()) return;
   const linkFor = (s: string): string => `#/job/${encodeURIComponent(id)}/${s}`;
 
   // 时刻对照：AI 提案与已有片段是不是同一段（按 start/end 精确比对，不猜标题）
@@ -132,22 +139,22 @@ export async function viewJob(id: string, rerender: () => void): Promise<void> {
       <div class="card ws-card" id="step-s00">
         <div class="ws-head">${icon("doc")} 字幕 ${automationRow(auto, "s00")}</div>
         <div class="actions">
-          <button class="btn" id="run-s00"${canRun(s00, byId) ? "" : " disabled"}>${icon("doc", 12)} ${s00.status === "empty" ? "导入字幕" : "重跑字幕"}</button>
+          <button class="btn${s00.status === "empty" ? " primary" : ""}" id="run-s00"${canRun(s00, byId) ? "" : " disabled"}>${icon("doc", 12)} ${s00.status === "empty" ? "生成字幕" : "重跑字幕"}</button>
           <span class="msg" id="run-status" role="status" aria-live="polite"></span>
         </div>
         ${depHint(s00, byId, linkFor)}
-        <div class="hint block">有 .srt 就直接解析；没有则用本地转写（SRT 优先，本地识别兜底）。重跑字幕后句子可能变少，选区会自动收回。</div>
       </div>
 
-      <div class="section-title">AI 抽卡 <span class="meta">每次抽卡另存一版，可切回</span></div>
+      <div class="section-title">AI 抽卡</div>
       <div class="card ws-card" id="step-s01">
         <div class="ws-head">${icon("spark")} 选高光 ${automationRow(auto, "s01")}</div>
         <div class="actions">
-          <button class="btn" id="run-s01"${canRun(s01st, byId) && llm.ok ? "" : " disabled"}>${icon("spark", 12)} ${s01.ai ? "再抽一版" : "AI 挑高光"}</button>
+          <button class="btn${s01.ai ? "" : " primary"}" id="run-s01"${canRun(s01st, byId) && llm.ok ? "" : " disabled"}>${icon("spark", 12)} ${s01.ai ? "再挑一版" : "AI 挑高光"}</button>
+          ${s01.ai ? `<span class="hint">另存一版，不覆盖，可切回</span>` : ""}
           <span class="msg" id="s01-status" role="status" aria-live="polite"></span>
         </div>
         ${depHint(s01st, byId, linkFor)}
-        <div class="hint block">AI 只提案，不落定稿。采纳 = 用这条候选建片段，与手工建片段走同一条 API。</div>
+        <div class="hint block">AI 只给提案——点「采纳」才会建片段，剪哪几句仍由你定。</div>
       </div>
       <div class="section-title">AI 提案 <span class="meta">${s01.ai ? `${esc(s01.ai.model)} · ${esc(s01.ai.at.slice(0, 19).replace("T", " "))}` : "未抽卡"}</span></div>
       <div class="card">${aiRows || `<div class="empty-hint">还没有 AI 提案——点上方「AI 挑高光」</div>`}</div>
@@ -161,8 +168,13 @@ export async function viewJob(id: string, rerender: () => void): Promise<void> {
       </details>
     </div>`;
 
+  // 写在 DOM 之后的接线也要查代次：这些 wire* 会 getElementById，
+  // 页面若已被切走，它们命中的是**新页面**的同名元素。
+  if (stale?.()) return;
   await wireAutomation(owner, rerender);
+  if (stale?.()) return;
   await wireTree(owner, rerender);
+  if (stale?.()) return;
   bindJobActions(rerender);
 
   document.getElementById("copy-path")!.addEventListener("click", async () => {
@@ -178,8 +190,14 @@ export async function viewJob(id: string, rerender: () => void): Promise<void> {
   const runS00 = document.getElementById("run-s00") as HTMLButtonElement;
   runS00.addEventListener("click", async () => {
     await withBusy(runS00, async () => {
-      const ok = await runWithConfirm(statusEl, owner, "s00", null);
-      if (ok) rerender();
+      const before = sentences?.sentences.length ?? 0;
+      const ok = await runWithConfirm(statusEl, owner, "s00", null, S00_NOTE);
+      if (!ok) return;
+      // 弹窗预告的是「可能会变少」，这里据实报出变了多少——预言和事实不该只留一个。
+      const after = await api<SentencesFile>(`/api/jobs/${encodeURIComponent(id)}/sentences`).catch(() => null);
+      const now = after?.sentences.length ?? 0;
+      if (now !== before) toast(before === 0 ? `生成 ${now} 句` : `句子 ${before} → ${now} 句`);
+      rerender();
     });
   });
 

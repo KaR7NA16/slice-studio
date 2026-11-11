@@ -18,8 +18,9 @@ interface StatResult {
 const statOf = (p: string): Promise<StatResult> =>
   api<StatResult>(`/api/fs/stat?path=${encodeURIComponent(p)}`);
 
-export async function viewHome(rerender: () => void): Promise<void> {
+export async function viewHome(rerender: () => void, stale?: () => boolean): Promise<void> {
   const [survey, libraryRaw] = await Promise.all([api<Survey>("/api/survey"), api<Library | null>("/api/library")]);
+  if (stale?.()) return;
   const library: Library = libraryRaw ?? { schema: 1, source_root: "（未入库）", items: [] };
   const clipsByJob = new Map<string, Survey["clips"]>();
   for (const c of survey.clips) {

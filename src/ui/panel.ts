@@ -96,7 +96,7 @@ export async function wireAutomation(owner: string, rerender: () => void): Promi
 
 // ---- b39：重跑确认页（只列将动哪些文件、不估时长） ----
 
-function previewBody(p: RunPreview): string {
+function previewBody(p: RunPreview, note?: string): string {
   const writes = p.writes.map((w) => `<li class="num">${esc(w)}</li>`).join("");
   const stale = p.marks_stale.length
     ? p.marks_stale.map((s) => `<li>${esc(s.step)} ${esc(s.title)}</li>`).join("")
@@ -104,14 +104,22 @@ function previewBody(p: RunPreview): string {
   const warn = p.warnings.length
     ? `<div class="warn-box">${p.warnings.map((w) => `<div>${icon("warn", 12)}${esc(w)}</div>`).join("")}</div>`
     : "";
+  // note 是「这一步会牵动什么」里**只有调用方知道**的那部分（如字幕重建会动选区）。
+  // 放在确认弹窗，是因为它只在按下去那一刻有用；常驻在卡片里就成了每次都要读的预言。
   return `<div class="pv-col"><div class="pv-title">将写入 / 覆盖</div><ul>${writes}</ul></div>
     <div class="pv-col"><div class="pv-title">重跑后会被标脏的下游</div><ul>${stale}</ul></div>
     ${warn}
+    ${note ? `<div class="hint">${esc(note)}</div>` : ""}
     <div class="hint">不估时长——这里只列事实。</div>`;
 }
 
 // 弹出重跑预览并等用户确认。返回 true = 用户点了确认。
-export async function confirmRun(owner: string, step: string, mode: string | null): Promise<boolean> {
+export async function confirmRun(
+  owner: string,
+  step: string,
+  mode: string | null,
+  note?: string,
+): Promise<boolean> {
   const q = mode ? `?mode=${encodeURIComponent(mode)}` : "";
   let p: RunPreview;
   try {
@@ -128,7 +136,7 @@ export async function confirmRun(owner: string, step: string, mode: string | nul
   }
   const v = await openModal({
     title: `重跑 ${esc(p.step)} ${esc(p.title)}`,
-    bodyHtml: previewBody(p),
+    bodyHtml: previewBody(p, note),
     actions: [
       { label: "取消", value: "cancel" },
       { label: "确认重跑", value: "ok", kind: "primary", autofocus: true },
@@ -143,8 +151,9 @@ export async function runWithConfirm(
   owner: string,
   step: string,
   mode: string | null,
+  note?: string,
 ): Promise<boolean> {
-  if (!(await confirmRun(owner, step, mode))) return false;
+  if (!(await confirmRun(owner, step, mode, note))) return false;
   return await runAndPoll(statusEl, owner, step, mode);
 }
 

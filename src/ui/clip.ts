@@ -26,13 +26,14 @@ const mediaUrl = (clipId: string, step: string, name: string): string =>
 // 所以在模块级挂着：goTab 写入 → 下一次 viewClip 渲染完消费（见下方）。
 let pendingTabFocus: string | null = null;
 
-export async function viewClip(id: string, tab: string, rerender: () => void): Promise<void> {
+export async function viewClip(id: string, tab: string, rerender: () => void, stale?: () => boolean): Promise<void> {
   const owner = `clips/${id}`;
   const [survey, tree, auto] = await Promise.all([
     api<Survey>("/api/survey"),
     api<VariantsView>(`/api/variants/${owner}`),
     api<AutomationView>(`/api/automation/${owner}`),
   ]);
+  if (stale?.()) return;
   const clip = survey.clips.find((c) => c.id === id);
   if (!clip) return notFound(`片段不存在：${id}`);
   const byId = new Map(clip.steps.map((s) => [s.step, s]));
@@ -81,7 +82,6 @@ export async function viewClip(id: string, tab: string, rerender: () => void): P
             <span class="msg" id="s02-status" role="status" aria-live="polite"></span>
           </div>
           ${depHint(s02, byId, linkFor)}
-          <div class="hint block">demucs htdemucs 分离；权重随包预置在数据根，运行时不联网。</div>
         </div>
         <div class="section-title">产物试听</div>
         <div class="card">${s02Audio || `<div class="empty-hint">还没有产物——先跑一次</div>`}</div>
@@ -122,7 +122,7 @@ export async function viewClip(id: string, tab: string, rerender: () => void): P
             <span class="msg" id="s05-status" role="status" aria-live="polite"></span>
           </div>
           ${depHint(s05, byId, linkFor)}
-          <div class="hint block">成片与素材包是两个并列的出口——只出一个不算完成。</div>
+          <div class="hint block">两个都要出：成片给人看，素材包回剪辑软件用。</div>
         </div>
         <div class="section-title">成片</div>
         <div class="card">
@@ -171,6 +171,9 @@ export async function viewClip(id: string, tab: string, rerender: () => void): P
   }
 
   await wireTree(owner, rerender);
+  // DOM 已写完，后面的接线都会 getElementById：页面若已被切走，
+  // 命中的是新页面的同名元素。所以每段之前都查一次代次。
+  if (stale?.()) return;
 
   // ---- s02 ----
   document.getElementById("run-s02")!.addEventListener("click", async () => {
@@ -181,7 +184,9 @@ export async function viewClip(id: string, tab: string, rerender: () => void): P
   // ⚠️ 必须排在 wireAutomation **之前**：s04 面板的 DOM 是这里才注入的，
   // 先接线的话 s04 那个档位开关会是一个没绑事件的死按钮（点了没反应，看起来像保存失败）。
   await s04Panel(id, owner, s04, byId, auto, linkFor, rerender);
+  if (stale?.()) return;
   await wireAutomation(owner, rerender);
+  if (stale?.()) return;
 
   // ---- s05 ----
   document.getElementById("run-s05")!.addEventListener("click", async () => {
@@ -189,7 +194,7 @@ export async function viewClip(id: string, tab: string, rerender: () => void): P
   });
 
   // ---- s03：句流 + 播放器联动 + 覆盖层 + 波形 ----
-  await wireS03(id, owner, s03, byId, linkFor, rerender, clip);
+  await wireS03(id, owner, s03, byId, linkFor, rerender, clip, stale);
 }
 
 async function wireS03(
@@ -200,8 +205,10 @@ async function wireS03(
   linkFor: (s: string) => string,
   rerender: () => void,
   clip: { start: number; end: number },
+  stale?: () => boolean,
 ): Promise<void> {
   const llm = await api<{ ok: boolean; model?: string; reason?: string }>("/api/llm");
+  if (stale?.()) return;
   const statusEl = document.getElementById("run-status")!;
   // 不再 .catch(() => null)：把失败压成 null 等于让「片段不存在 / 服务端 5xx / 网络断」
   // 全部伪装成「句流未构建」，用户于是去点重建——重建也失败、原因同样被吞（N-4）。
@@ -212,6 +219,7 @@ async function wireS03(
   } catch (err) {
     setMsg(statusEl, err instanceof Error ? err.message : String(err), "err");
   }
+  if (stale?.()) return;
   const draftBtn = document.getElementById("run-draft") as HTMLButtonElement;
   if (!llm.ok) {
     draftBtn.disabled = true;

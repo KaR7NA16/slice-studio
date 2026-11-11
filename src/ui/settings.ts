@@ -22,6 +22,10 @@ let hints = new Map<string, string>(); // id → key_hint（占位符用）
 let modelLists = new Map<string, string[]>(); // id → 拉取到的模型清单（切档重画不丢）
 let savedOk = false;
 let savedReason = "";
+// 重画会换掉整棵 DOM，状态位那个元素也随之作废。原先的做法是「重画完再把提示写到新元素上」，
+// 但重画是异步的（要等 /api/automation/global），中间那一刻写谁都说不准。
+// 改成把提示挂在模块级、由重画自己渲染——与 drafts 同一套思路：跨重画要留的东西放模块级。
+let flash: { text: string; kind: "ok" | "err" } | null = null;
 
 function newDraft(): Draft {
   let id = "";
@@ -71,10 +75,15 @@ function globalAutomationHtml(g: AutomationSettings): string {
   }).join("");
 }
 
-export async function viewSettings(rerender: () => void): Promise<void> {
+export async function viewSettings(rerender: () => void, stale?: () => boolean): Promise<void> {
   if (drafts === null) await loadSettings();
+  if (stale?.()) return;
   const global = (await api<{ global: AutomationSettings }>("/api/automation/global")).global;
+  if (stale?.()) return;
   const ds = drafts!;
+  // 取走并清空：提示只说一次，下次重画不该再冒出来
+  const note = flash;
+  flash = null;
   if (cur >= ds.length) cur = Math.max(0, ds.length - 1);
   const d = ds[cur]!;
   const hint = hints.get(d.id) ?? "";
@@ -123,7 +132,7 @@ export async function viewSettings(rerender: () => void): Promise<void> {
         <button class="btn" id="st-test">测试连接</button>
         <button class="btn primary" id="st-save">保存</button>
         <button class="btn" id="st-reload">放弃修改并重载</button>
-        <span class="msg" id="st-msg" role="status" aria-live="polite"></span>
+        <span class="msg${note ? ` ${note.kind}` : ""}" id="st-msg" role="status" aria-live="polite">${note ? esc(note.text) : ""}</span>
       </div>
 
       <div class="section-title">全局自动化档位（片段可逐条覆盖）</div>
@@ -140,13 +149,13 @@ export async function viewSettings(rerender: () => void): Promise<void> {
   pick.addEventListener("change", () => {
     syncFromDom();
     cur = Number(pick.value);
-    void viewSettings(rerender);
+    rerender();
   });
   document.getElementById("st-add")!.addEventListener("click", () => {
     syncFromDom();
     ds.push(newDraft());
     cur = ds.length - 1;
-    void viewSettings(rerender);
+    rerender();
   });
   document.getElementById("st-del")!.addEventListener("click", async () => {
     const ok = await confirmModal({
@@ -160,16 +169,16 @@ export async function viewSettings(rerender: () => void): Promise<void> {
     if (defaultId === d.id) defaultId = ds[0]?.id ?? null;
     if (ds.length === 0) ds.push(newDraft());
     cur = Math.max(0, Math.min(cur, ds.length - 1));
-    void viewSettings(rerender);
+    rerender();
   });
   document.getElementById("st-default")!.addEventListener("click", () => {
     syncFromDom();
     defaultId = d.id;
-    void viewSettings(rerender);
+    rerender();
   });
   document.getElementById("st-reload")!.addEventListener("click", async () => {
     await loadSettings();
-    void viewSettings(rerender);
+    rerender();
   });
   document.getElementById("st-fetch")!.addEventListener("click", async () => {
     syncFromDom();
@@ -219,9 +228,10 @@ export async function viewSettings(rerender: () => void): Promise<void> {
       savedReason = v.reason ?? "";
       cur = Math.max(0, Math.min(cur, drafts.length - 1));
       if (drafts.length === 0) drafts.push(newDraft());
-      await viewSettings(rerender);
-      // 重画后 msg 是旧元素，提示写到新的那个上
-      setMsg(document.getElementById("st-msg")!, v.ok ? "已保存：默认档可用" : `已保存。${v.reason ?? ""}`, v.ok ? "ok" : "err");
+      // 重画走统一入口（带代次），并把提示挂到 flash 上交给它渲染——
+      // 不再「重画完再 setMsg 到新元素」，那样依赖「重画恰好已经完成」这个未保证的前提。
+      flash = { text: v.ok ? "已保存：默认档可用" : `已保存。${v.reason ?? ""}`, kind: v.ok ? "ok" : "err" };
+      rerender();
     } catch (e) {
       setMsg(msg, e instanceof Error ? e.message : String(e), "err");
     }
@@ -241,7 +251,7 @@ export async function viewSettings(rerender: () => void): Promise<void> {
       } catch (e) {
         toast(e instanceof Error ? e.message : String(e), "err");
       }
-      void viewSettings(rerender);
+      rerender();
     });
   }
 }

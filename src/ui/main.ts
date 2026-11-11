@@ -25,19 +25,33 @@ function route(): Route {
   return { view: "home" };
 }
 
+// 每次都画一个代次，视图拿这个判断「我还是当前这一页吗」。
+// 没有它的话：点一下任务 → await 拉数据期间又切回总览 → 旧代返回，
+// 照常 app.innerHTML = 任务页，把用户刚打开的总览覆盖掉。整页级，不是局部错位。
+// 视图是「先 await 取数、再一次性 innerHTML」，所以只要在写 DOM 前查一次代次就够；
+// 写 DOM 之后还在跑的线（wireS03 之类会再 getElementById）也必须查——
+// 否则它会命中**新页面**里同名的元素，把上一步的产物写进不相干的页面。
+let gen = 0;
+
 async function render(): Promise<void> {
+  const my = ++gen;
+  const stale = (): boolean => my !== gen;
   const r = route();
   const again = (): void => void render();
   if (r.view === "job") {
-    await viewJob(r.id, again);
+    await viewJob(r.id, again, stale);
+    if (stale()) return;
     // 深链 #/job/<id>/s01 要能定位到那个工作空间（b59 的「入口」就靠它）
     if (r.step) document.getElementById(`step-${r.step}`)?.scrollIntoView({ block: "start" });
   } else if (r.view === "clip") {
-    await viewClip(r.id, r.tab, again);
+    await viewClip(r.id, r.tab, again, stale);
+    if (stale()) return;
   } else if (r.view === "settings") {
-    await viewSettings(again);
+    await viewSettings(again, stale);
+    if (stale()) return;
   } else {
-    await viewHome(again);
+    await viewHome(again, stale);
+    if (stale()) return;
   }
   // 主题按钮随每次重画重新接线（视图各画各的 innerHTML，事件不跟着走）
   wireThemeButton();

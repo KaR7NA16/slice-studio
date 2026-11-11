@@ -273,6 +273,40 @@ try {
   });
   const base = `http://127.0.0.1:${port}`;
 
+  // ============ O. 重画代次：慢的旧代不许覆盖新页（必须第一个跑） ============
+  // 为什么排在最前：这个缺陷一旦存在，后面每一段都可能撞上「元素被换掉」而中断，
+  // 而中断的输出是「N passed / 0 failed」——failed 是 0，很容易被当成通过。
+  // 放在第一位，它会在任何中断之前先给出一条明确的红。
+  //
+  // 判据本身也特殊：靠「等元素出现」抓不到，因为旧代写的是**另一个页面**，
+  // 元素在、页面错。必须造出「旧代比新代晚返回」的时序：
+  // 拦下 survey，第一发挂 800ms（首页那一代），之后放行（任务页那一代立即完成）。
+  // 没有代次控制时，首页会晚于任务页返回，把用户刚打开的任务页整页覆盖成首页。
+  console.log("[O] 重画代次：旧代晚返回时不许覆盖新页");
+  let surveyHits = 0;
+  await page.route("**/api/survey", async (route) => {
+    surveyHits++;
+    if (surveyHits === 1) await new Promise((r) => setTimeout(r, 800));
+    await route.continue();
+  });
+  await page.goto(`${base}/#/`, { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(150); // 首页 render 已发出 survey，正挂在那里
+  await page.evaluate(() => {
+    location.hash = "#/job/ui-j1";
+  });
+  await page.waitForTimeout(1400); // 等旧代（800ms）也走完——它此刻才有机会覆盖
+  const genCheck = await page.evaluate(() => ({
+    hash: location.hash,
+    job: !!document.getElementById("job-sents"),
+    home: !!document.getElementById("nj-go"),
+  }));
+  await page.unroute("**/api/survey");
+  check(
+    `hash 是任务页时 DOM 也是任务页（实测 job=${String(genCheck.job)} / home=${String(genCheck.home)}）`,
+    genCheck.job && !genCheck.home,
+    true,
+  );
+
   // ============ A. P1-4：missing 在总览页的渲染 ============
   console.log("[A] P1-4：missing 态渲染（步骤行圆点 / 状态文案 / 待办条）");
   await page.goto(`${base}/#/`);
@@ -355,13 +389,28 @@ try {
   await page.fill("#st-url", "https://api.example.com/v1");
   await page.fill("#st-model", "other-model");
   await page.click("#st-add"); // 建第二个档
-  await page.waitForSelector("#st-name");
+  // 不能等 "#st-name"：旧 DOM 上也有这个 id，重画还没完成时它就已经匹配了，
+  // 后面几个 fill 会落在随即被丢弃的旧节点上（本轮实测 name 就是这么丢的）。
+  // 等「档数真的变成 2 且选到第 2 档」——这是重画完成的确定信号。
+  await page.waitForFunction(
+    () => {
+      const sel = document.getElementById("st-pick") as HTMLSelectElement | null;
+      return !!sel && sel.options.length === 2 && sel.selectedIndex === 1;
+    },
+    null,
+    { timeout: 8000 },
+  );
   await page.fill("#st-name", "冒烟档");
   await page.fill("#st-url", "https://api.example.com/v1");
   await page.fill("#st-key", KEY);
   await page.fill("#st-model", "smoke-model");
   await page.click("#st-default"); // ← 触发重画：DEFECT #2 就是在这里把刚填的 key 丢掉的
-  await page.waitForSelector("#st-key");
+  // 同理：等「按钮自己变成已是默认」而不是等 key 输入框还在
+  await page.waitForFunction(
+    () => (document.getElementById("st-default") as HTMLButtonElement | null)?.disabled === true,
+    null,
+    { timeout: 8000 },
+  );
   check("点「设为默认」（重画）后 key 仍在输入框里", await page.inputValue("#st-key"), KEY);
   check("重画后其它字段也还在", await page.inputValue("#st-model"), "smoke-model");
   await page.click("#st-save");
@@ -373,9 +422,29 @@ try {
   check("默认档指向刚设的那个", cfg.llm.profiles.find((p: { id: string }) => p.id === cfg.llm.default_id)?.model, "smoke-model");
 
   await page.goto(`${base}/#/settings`); // 重载：走一遍真实读取路径
-  await page.waitForSelector("#st-pick");
+  await page.waitForFunction(
+    () => {
+      const sel = document.getElementById("st-pick") as HTMLSelectElement | null;
+      return !!sel && sel.options.length === 2;
+    },
+    null,
+    { timeout: 8000 },
+  );
+  // 切档的等待条件要中立：等「输入框被换成新元素」，而不是等我们要断言的 placeholder 出现——
+  // 后者若恰好没出现，会变成超时中断而不是一条红（这个坑本文件已经踩过两次）。
+  await page.evaluate(() => {
+    (window as unknown as { __oldKey?: Element | null }).__oldKey = document.getElementById("st-key");
+  });
   await page.selectOption("#st-pick", "1"); // 切到有 key 的那一档
-  await page.waitForSelector("#st-key");
+  await page.waitForFunction(
+    () => {
+      const w = window as unknown as { __oldKey?: Element | null };
+      const k = document.getElementById("st-key");
+      return !!k && k !== w.__oldKey;
+    },
+    null,
+    { timeout: 8000 },
+  );
   check("重载后 key 输入框为空（明文不下发浏览器）", await page.inputValue("#st-key"), "");
   check("重载后 placeholder 是掩码提示", (await page.getAttribute("#st-key", "placeholder"))?.includes("已存"), true);
   const apiText = await page.evaluate(() => fetch("/api/llm").then((r) => r.text()));
@@ -768,7 +837,22 @@ try {
   check(`表单外框右边界对齐（输入框 ${njAlign.rights[0]} / 建任务 ${njAlign.rights[1]}）`, Math.abs(njAlign.rights[0]! - njAlign.rights[1]!) <= 1, true);
 
   await page.goto(`${base}/#/job/ui-j1`);
-  await page.waitForSelector("#job-sents .sent");
+  // 等「句行已画成最终形态」，不是「出现就算」。hash 导航后 render 可能并发
+  // （render() 没有丢弃过期结果的机制），前一版 DOM 会被后一版替换——
+  // 等「出现」会拿到一个随即消失的节点，紧接着的 getComputedStyle 就拿到 null 直接中断。
+  // 这正是「等条件依赖被测行为」的另一种形态：等对了时机，错的是「只要出现」。
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector("#job-sents .sent");
+      if (!el) return false;
+      // 光有 minHeight 不够：元素若还在隐藏容器里，computed min-height 照样是 32px，
+      // 但实高是 0——下一句就量出 0 然后误红。所以两个条件都要满足。
+      const h = el.getBoundingClientRect().height;
+      return h >= 32 && getComputedStyle(el).minHeight === "32px";
+    },
+    null,
+    { timeout: 10000 },
+  );
   check("句流最小行高 32px", await page.evaluate(() => getComputedStyle(document.querySelector("#job-sents .sent")!).minHeight), "32px");
   // W-07：实际高度 34.5 = min-height 32 的下界 + padding 3×2 + border 1，内容 27.5 由时间码两行撑开。
   // 两行是模板里的显式 <br/>（tc(s.start) / tc(s.end)）——逐句删留时要同时看见区间两端，
@@ -1562,6 +1646,62 @@ try {
       true,
     );
   }
+
+  // ============ N. 步骤动作：命名 / 层级 / 文案卫生 ============
+  // 两类信息不该常驻在界面上：① 实现策略（用哪个引擎、权重放哪、走不走网络）——
+  // 用户无法据此做任何决定；② 架构断言（「走同一条 API」）——那是对审查者说的话。
+  // 已有先例：界面不许出现内部合约编号（bNN），这条是同一原则的延伸。
+  console.log("[N] 任务页步骤卡：按钮命名 / 层级 / 文案卫生");
+  const btnOf = (sel: string): Promise<{ txt: string; cls: string }> =>
+    page.$eval(sel, (el) => ({ txt: (el.textContent ?? "").trim(), cls: el.className }));
+
+  await page.goto(`${base}/#/job/ui-j1`);
+  // 等本页独有的东西：`#run-s00` 在下一段要去的 ui-j3 上也有，
+  // 拿它当就绪信号就会在 hash 切换后立刻命中旧 DOM（这坑已经踩过三回）。
+  await page.waitForSelector("#job-sents .sent", { timeout: 8000 });
+  const j1s00 = await btnOf("#run-s00");
+  const j1s01 = await btnOf("#run-s01");
+  check(`有产物时字幕按钮不带「导入」二字（实测「${j1s00.txt}」）`, /导入/.test(j1s00.txt), false);
+  check(`有产物时字幕是「重跑字幕」（实测「${j1s00.txt}」）`, j1s00.txt.includes("重跑字幕"), true);
+  check("有产物时字幕按钮退回次级（不与「建片段」争主位）", /\bprimary\b/.test(j1s00.cls), false);
+  check(`二次挑高光叫「再挑一版」（实测「${j1s01.txt}」）`, j1s01.txt.includes("再挑一版"), true);
+  check("有产物时选高光按钮也是次级", /\bprimary\b/.test(j1s01.cls), false);
+  // 「会不会覆盖现在这版」是按下前的第一个疑问，答案必须贴着按钮，不能藏到 section 标题里
+  const s01Actions = (await page.textContent("#step-s01 .actions")) ?? "";
+  check("「另存一版」贴着按钮说（此前在 section 标题里，隔着整张卡头）", s01Actions.includes("另存一版"), true);
+
+  // 空态反过来：这一步是这一屏唯一能做的事，就该是主按钮。
+  // 但不能让三个按钮都 primary——那样「建片段」的主位就没了，所以是**状态驱动**而非一律升格。
+  await page.goto(`${base}/#/job/ui-j3`);
+  // ui-j3 一步没跑过 → 句流区是空提示，ui-j1 那边是 4 条 .sent，用它区分页面
+  await page.waitForSelector("#job-sents .empty-hint", { timeout: 8000 });
+  const j3s00 = await btnOf("#run-s00");
+  const j3s01 = await btnOf("#run-s01");
+  check(`空态字幕按钮是动作名（实测「${j3s00.txt}」）`, j3s00.txt.includes("生成字幕"), true);
+  // 空态才是「导入」这个词真正会误导人的地方：它暗示点开能选文件，实际是直接开跑。
+  // 只看有产物那一页会漏掉——那页的文案根本不是「导入」。
+  check(`空态字幕按钮不带「导入」二字（实测「${j3s00.txt}」）`, /导入/.test(j3s00.txt), false);
+  check("空态字幕按钮是 primary", /\bprimary\b/.test(j3s00.cls), true);
+  check(`空态选高光叫「AI 挑高光」（实测「${j3s01.txt}」）`, j3s01.txt.includes("AI 挑高光"), true);
+  check("空态选高光也是 primary", /\bprimary\b/.test(j3s01.cls), true);
+
+  // 文案卫生：常驻说明里不许出现实现细节与架构断言
+  const hints = await page.evaluate(() => {
+    const pick = (sel: string): string[] => Array.from(document.querySelectorAll(sel)).map((e) => e.textContent ?? "");
+    return pick(".hint.block").concat(pick(".ws-card .hint"));
+  });
+  const bannedWords = ["本地识别兜底", "同一条 API", "权重随包", "demucs", "htdemucs", "不落定稿"];
+  check("任务页说明不解释实现、不引用架构断言", bannedWords.filter((b) => hints.some((h) => h.includes(b))), []);
+
+  // 副作用预告挪到「按下去那一刻」：卡片里不许再预言，弹窗里必须有
+  await page.goto(`${base}/#/job/ui-j1`);
+  await page.waitForSelector("#job-sents .sent", { timeout: 8000 });
+  check("「句子可能变少」不再常驻在卡片里", ((await page.textContent("#step-s00")) ?? "").includes("句子可能变少"), false);
+  await page.click("#run-s00");
+  await page.waitForSelector(".modal", { timeout: 10000 });
+  check("重跑字幕的确认页会说明选区怎么收", ((await page.textContent(".modal")) ?? "").includes("起止句会收回"), true);
+  await page.click('.modal [data-act="cancel"]');
+  await page.waitForSelector(".modal", { state: "detached", timeout: 5000 });
 
   check("全程没有出现原生 alert/confirm/prompt", nativeDialogs, 0);
 

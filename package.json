@@ -2,13 +2,23 @@
   "name": "slice-studio",
   "version": "0.1.0",
   "private": true,
+  "description": "本地自托管的 AI 切片编辑器：六步流水线把中文口播视频切成短片，产物可查可改",
+  "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
   "scripts": {
     "start": "node src/server/main.ts",
     "build": "vite build",
     "check": "tsc --noEmit",
+    "verify": "npm run verify:tokens && npm run verify:stage1 && npm run verify:stage2 && npm run verify:ui && npm run verify:e2e && npm run verify:launch",
     "verify:tokens": "node tools/verify-tokens.ts",
-    "verify:ui": "node tools/verify-ui.ts"
+    "verify:stage1": "node tools/verify-stage1.ts",
+    "verify:stage2": "node tools/verify-stage2.ts",
+    "verify:ui": "node tools/verify-ui.ts",
+    "verify:e2e": "node tools/verify-e2e.ts",
+    "verify:launch": "node tools/verify-launch.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

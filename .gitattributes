@@ -1,0 +1,33 @@
+# ═══════════════════════════════════════════════════════════════════
+# slice-studio / .gitattributes
+# 只做三件事：统一换行、声明二进制、把夹具排除在语言统计外。
+# ═══════════════════════════════════════════════════════════════════
+
+# ── 换行：入库与检出都用 LF ───────────────────────────────────────
+# 本仓库现有 75 个入库文件的 index 已经是 LF，但 Windows 上
+# core.autocrlf=true 会让**检出**变成 CRLF。两套设置并存时，只要有人
+# 换一台机器提交，就会出现「整文件重写」的假 diff（真实案例：本轮之前
+# src/server/main.ts 与 src/ui/app.css 的 index 是 LF、工作区是 CRLF）。
+# 显式钉住 eol=lf，任何人任何机器上行为一致。
+* text=auto eol=lf
+
+# ── 二进制：不做换行转换，不让 git 当文本 diff ─────────────────────
+# 判据夹具（asr-sample.mp4）也要声明，否则 git 可能在打包时改字节。
+*.mp4 binary
+*.mp3 binary
+*.wav binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.exe binary
+*.dll binary
+*.onnx binary
+*.th binary
+*.zip binary
+
+# ── 语言统计口径 ─────────────────────────────────────────────────
+# 夹具是素材不是代码；dist 是构建产物。两者都不该算进仓库的「代码行数」。
+tools/fixtures/* linguist-vendored
+dist/* linguist-generated=true

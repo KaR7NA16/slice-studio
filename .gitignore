@@ -1,47 +1,97 @@
-# 留档（删除前的旧实现，可随时整个删）
-_attic/
+# ═══════════════════════════════════════════════════════════════════
+# slice-studio / .gitignore
+#
+# 这个文件决定「别人克隆下来能拿到什么」。原则只有一条：
+#   **仓库只放【源码 + 文档 + 判据脚本 + 小夹具】。**
+# 二进制运行时、模型权重、素材、运行时产物一律不入库，理由有三：
+#   ① 大文件一旦进了提交历史就出不来（要清得重写历史）；
+#   ② 入库存的是「我这台机器的目录结构」，换台机器就错；
+#   ③ 素材有版权、模型有各自的许可，混进仓库等于替原作者做授权决定。
+#
+# 每条规则后面写「为什么」，是为了将来想加一行之前先看一眼有没有反例。
+# ═══════════════════════════════════════════════════════════════════
 
-# 依赖与构建产物
+# ── 1. 依赖与构建产物 ─────────────────────────────────────────────
+# npm i / npm run build 可完整重建，没有留存价值。
+# node_modules 里还有平台相关二进制（如 @esbuild/win32-x64/esbuild.exe 12MB）。
 node_modules/
 dist/
 
-# 运行时工作文件（素材索引、任务产物）
+# ── 2. 运行时数据根 ───────────────────────────────────────────────
+# 任务、片段、run 记录、素材索引全部现算或可重建；一次完整链路跑下来能到 GB 级。
+# 目录结构由服务端首次访问时自建，不需要入库占位（空目录 git 本来也不收）。
 data/
 work/
 
-# 外部工具二进制（自带固定版，不入库）
-tools/ffmpeg/
+# ── 3. 外部工具二进制（自带固定版本，不入库）─────────────────────
+# 换机器时按 README「依赖准备」重新获取。三者合计约 1.5GB，且都是第三方构建物。
+#   tools/node/    Node v22.22.2（node.exe 84MB + npm/corepack）
+#   tools/ffmpeg/  FFmpeg/ffprobe 9.0.1（99MB + 98MB，GPL 构建，见 README 许可一节）
+#   tools/python/  Python 3.13.14 base + venv（torch/demucs/onnxruntime，约 1.2GB）
 tools/node/
+tools/ffmpeg/
 tools/python/
 
-# 随包预置的模型权重（80.2MB，分发时打进绿色目录，不入库）
-# 内容：models/demucs/{htdemucs.yaml, 955717e8-8726e21a.th}
-# 加载方式：Separator(model="htdemucs", repo=<数据根>/models/demucs) → LocalRepo，零网络
+# ── 4. 模型权重（不入库，也不进 LFS）──────────────────────────────
+#   models/asr/model.int8.onnx   233MB  Paraformer ONNX int8（FunASR 官方导出）
+#   models/demucs/955717e8-*.th   80MB  htdemucs
+# 两者都超过 GitHub 单文件 100MB 硬限；放 release 附件或首次准备时下载，
+# 加载方式见 docs/项目规划.md §6 硬约束⑤⑥（本地目录加载，零网络）。
 models/
 
-# 项目素材库（97 首 mp3 / 484MB，不入库）
-# 索引在 data/library.json，source_root 记相对路径 assets，指向可在界面改。
+# ── 5. 项目素材库（不入库）────────────────────────────────────────
+# assets/bgm/ = 97 首 mp3 / 484MB / 7 个 mood 组，**版权不在本项目**，
+# 公开仓库不得分发。索引在 data/library.json（已随 data/ 忽略），
+# source_root 记相对路径 "assets"，指向可在界面里改（总览页「素材库」）。
 assets/
 
-# 本机密钥配置（模板 config.example.json 入库）
+# ── 6. 本机配置（含密钥）─────────────────────────────────────────
+# config.json 存 LLM 的 api_key。/api/config 对外只回 key_hint，但文件本身是明文。
+# 模板 config.example.json **入库**，新克隆照它复制一份填 key。
 config.json
 
-# 项目记忆链（agent 生成，每会话重写；含本机绝对路径，不随仓库分发）
-.workbuddy-ai/
-
-# 其他
-*.log
-.DS_Store
-
-# 启动器编译产物（源码在 launcher/Launcher.cs，双击前由 csc 编到目录根）
+# ── 7. 启动器编译产物 ─────────────────────────────────────────────
+# launcher/Launcher.cs 入库；用 csc 编到目录根，双击即用。产物不入库。
 /slice-studio.exe
 
-# Python 运行缓存
+# ── 8. Agent 会话记忆与运行缓存 ───────────────────────────────────
+# 每会话重写，且含本机绝对路径。入库会让每次提交都带一堆与代码无关的噪声 diff，
+# 公开仓库还会泄露本机目录结构。
+.workbuddy/
+.workbuddy-ai/
+
+# ── 9. 归档与杂项 ─────────────────────────────────────────────────
+# _attic/ 是重构前的旧实现留档，随时可整个删；不入库以免被当成现任代码读。
+_attic/
+*.log
+Thumbs.db
+.DS_Store
+.vscode/
+
+# ── 10. Python 运行缓存 ───────────────────────────────────────────
 __pycache__/
 *.pyc
 
-# agent 会话记忆（每会话重写，含本机绝对路径，不随仓库分发）
-.workbuddy/
+# ── 11. 大文件兜底守卫 ────────────────────────────────────────────
+# 上面按目录忽略；这一组按后缀兜底，防「有人把权重/音频丢进 src/ 或 docs/」。
+# 只列几乎不可能属于源码的后缀，宁可窄也不能误伤。
+*.onnx
+*.th
+*.pt
+*.pth
+*.safetensors
+*.wav
+*.m4a
+*.flac
+
+# ⚠️ 反例（这几条**故意不写**，动笔之前先想清楚）：
+#   *.mp4      → tools/fixtures/asr-sample.mp4 是判据夹具，必须入库（99KB）。
+#                忽略 mp4 会让 s00 的 ASR 分支失去唯一夹具。
+#   *.json     → package.json / tsconfig.json / config.example.json 都要入库。
+#                运行期 JSON 已按目录（data/、work/）拦掉。
+#   *.md       → docs/ 三份文档是项目的决策记录，正是最该入库的东西。
+#   !xxx 反例  → 在被忽略的目录内部写 ! 是无效的（git 不进入被忽略的目录），
+#                所以不要指望用 ! 从 tools/node/ 里捞单个文件出来。
 
 # 文档留在本机，不进远端
 docs/

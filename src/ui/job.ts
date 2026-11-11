@@ -17,6 +17,20 @@ import { toast } from "./toast.ts";
 // 建片段的区间选择（模块级：切视图后回来还在）
 const selection = new Map<string, { i: number | null; j: number | null }>();
 
+type Sel = { i: number | null; j: number | null };
+
+// 选区按当前句数夹紧：重跑字幕后句子变少，旧的 i/j 会越界（此前 refreshSel 直接抛错）。
+// 抽成函数不是为了复用一次，而是因为「跑完要报选区收到哪」必须和「重画时真的收」走同一规则——
+// 两份各写一遍，报出来的数字就会和界面对不上。
+function clampSel(cur: Sel, n: number): Sel {
+  if (n === 0) return { i: null, j: null };
+  let { i, j } = cur;
+  if (i !== null && i >= n) i = n - 1;
+  if (j !== null && j >= n) j = n - 1;
+  if (i !== null && j !== null && i > j) [i, j] = [j, i];
+  return { i, j };
+}
+
 const RATES = [0.75, 1, 1.25, 1.5];
 
 // 重跑字幕会牵动选区。这句话只在确认弹窗里出现——按下去那一刻它才决定行为，
@@ -46,14 +60,7 @@ export async function viewJob(id: string, rerender: () => void, stale?: () => bo
   const sel = selection.get(id) ?? { i: null as number | null, j: null as number | null };
   selection.set(id, sel);
   const n = sentences?.sentences.length ?? 0;
-  if (n === 0) {
-    sel.i = null;
-    sel.j = null;
-  } else {
-    if (sel.i !== null && sel.i >= n) sel.i = n - 1;
-    if (sel.j !== null && sel.j >= n) sel.j = n - 1;
-    if (sel.i !== null && sel.j !== null && sel.i > sel.j) [sel.i, sel.j] = [sel.j, sel.i];
-  }
+  Object.assign(sel, clampSel(sel, n));
 
   const tree = await api<VariantsView>(`/api/variants/${owner}`);
   const auto = await api<AutomationView>(`/api/automation/${owner}`);
@@ -190,13 +197,27 @@ export async function viewJob(id: string, rerender: () => void, stale?: () => bo
   const runS00 = document.getElementById("run-s00") as HTMLButtonElement;
   runS00.addEventListener("click", async () => {
     await withBusy(runS00, async () => {
-      const before = sentences?.sentences.length ?? 0;
+      const beforeN = sentences?.sentences.length ?? 0;
+      const beforeSel = sel.i !== null && sel.j !== null ? { i: sel.i, j: sel.j } : null;
       const ok = await runWithConfirm(statusEl, owner, "s00", null, S00_NOTE);
       if (!ok) return;
       // 弹窗预告的是「可能会变少」，这里据实报出变了多少——预言和事实不该只留一个。
+      // 两件事分开报：句数变了、选区被收紧了。只报前者，用户会发现选区悄悄挪了却不知道为什么。
       const after = await api<SentencesFile>(`/api/jobs/${encodeURIComponent(id)}/sentences`).catch(() => null);
       const now = after?.sentences.length ?? 0;
-      if (now !== before) toast(before === 0 ? `生成 ${now} 句` : `句子 ${before} → ${now} 句`);
+      const parts: string[] = [];
+      if (now !== beforeN) parts.push(beforeN === 0 ? `生成 ${now} 句` : `句子 ${beforeN} → ${now} 句`);
+      if (beforeSel) {
+        const afterSel = clampSel(beforeSel, now);
+        if (afterSel.i !== beforeSel.i || afterSel.j !== beforeSel.j) {
+          parts.push(
+            afterSel.i === null || afterSel.j === null
+              ? `选区已清空（原先 ${beforeSel.i + 1}–${beforeSel.j + 1} 句）`
+              : `选区 ${beforeSel.i + 1}–${beforeSel.j + 1} → ${afterSel.i + 1}–${afterSel.j + 1} 句`,
+          );
+        }
+      }
+      if (parts.length) toast(parts.join("；"));
       rerender();
     });
   });

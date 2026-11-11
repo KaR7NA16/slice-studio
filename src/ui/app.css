@@ -262,6 +262,10 @@ input[type="checkbox"] { accent-color: var(--accent); }
   animation: spin 0.8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+/* 长任务的已用时。故意在 .msg（live region）**之外**：它每 800ms 变一次，
+   放进去会让读屏把「已用 0:03 / 0:04」一句句念出来（见 lib.ts runAndPoll ④）。
+   tabular-nums 是必须的：等宽数字才不会让整行随秒数左右抖动。 */
+.elapsed { margin-left: var(--pad-1); font-size: var(--fs-sm); color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
 .file-chip {
   display: inline-flex; align-items: center; gap: 6px; min-width: 0;

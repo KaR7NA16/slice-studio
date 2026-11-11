@@ -162,6 +162,14 @@ export const post = <T>(url: string, body: unknown): Promise<T> =>
 // 三条纪律（此前都没有）：① 每次轮询自己 catch，服务端 5xx 不会变成未处理 rejection；
 // ② 视图被重画/离页后（statusEl 脱离 DOM）立刻停，避免继续打已废弃的 run；
 // ③ 连续 3 次拿不到心跳才判失败——单次抖动不该把一次正常的长任务报成失败。
+// ④ 显示已用时，但**不进 live region**：这个数字每 800ms 变一次，放进
+//    role=status 里读屏会把「已用 0:03 / 0:04 / 0:05」一句句念出来。用户要的是
+//    「它还在动」，不是听秒表。所以它挂在状态位旁边的兄弟节点上，并 aria-hidden。
+const mmss = (ms: number): string => {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
 export async function runAndPoll(
   statusEl: HTMLElement,
   owner: string,
@@ -169,39 +177,56 @@ export async function runAndPoll(
   mode: string | null,
 ): Promise<boolean> {
   setMsg(statusEl, "启动中…", "busy");
+  const elapsedEl = document.createElement("span");
+  elapsedEl.className = "elapsed";
+  elapsedEl.setAttribute("aria-hidden", "true");
+  statusEl.insertAdjacentElement("afterend", elapsedEl);
   let rec: RunRecord;
   try {
     rec = await post<RunRecord>("/api/run", { owner, step, mode });
   } catch (e) {
+    elapsedEl.remove();
     setMsg(statusEl, `失败：${e instanceof Error ? e.message : String(e)}`, "err");
     return false;
   }
-  let lost = 0;
-  for (;;) {
-    await new Promise((r) => setTimeout(r, 800));
-    if (!statusEl.isConnected) return false; // 已离页：这不是失败，是没人看了
-    let cur: RunRecord;
-    try {
-      cur = await api<RunRecord>(`/api/runs/${rec.id}`);
-      lost = 0;
-    } catch (e) {
-      lost++;
-      if (lost >= 3) {
-        setMsg(statusEl, `失去与服务端的联系：${e instanceof Error ? e.message : String(e)}`, "err");
+  // 用服务端记的开始时刻，不是点下去的那一刻：排队等槽的时间不算「在跑」，
+  // 否则 sliver 一长，用户会以为任务卡在开头。
+  const startedAt = Number.isFinite(Date.parse(rec.started_at)) ? Date.parse(rec.started_at) : Date.now();
+  const paint = (): void => {
+    elapsedEl.textContent = `已用 ${mmss(Date.now() - startedAt)}`;
+  };
+  paint();
+  try {
+    let lost = 0;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 800));
+      paint();
+      if (!statusEl.isConnected) return false; // 已离页：这不是失败，是没人看了
+      let cur: RunRecord;
+      try {
+        cur = await api<RunRecord>(`/api/runs/${rec.id}`);
+        lost = 0;
+      } catch (e) {
+        lost++;
+        if (lost >= 3) {
+          setMsg(statusEl, `失去与服务端的联系：${e instanceof Error ? e.message : String(e)}`, "err");
+          return false;
+        }
+        setMsg(statusEl, "连接波动，正在重试…", "busy");
+        continue;
+      }
+      if (cur.status !== "running") {
+        if (cur.status === "done") {
+          setMsg(statusEl, `完成：${cur.message}`, "ok");
+          return true;
+        }
+        setMsg(statusEl, `失败：${cur.error ?? cur.message}`, "err");
         return false;
       }
-      setMsg(statusEl, "连接波动，正在重试…", "busy");
-      continue;
+      setMsg(statusEl, cur.message, "busy");
     }
-    if (cur.status !== "running") {
-      if (cur.status === "done") {
-        setMsg(statusEl, `完成：${cur.message}`, "ok");
-        return true;
-      }
-      setMsg(statusEl, `失败：${cur.error ?? cur.message}`, "err");
-      return false;
-    }
-    setMsg(statusEl, cur.message, "busy");
+  } finally {
+    elapsedEl.remove();
   }
 }
 

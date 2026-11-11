@@ -1703,6 +1703,83 @@ try {
   await page.click('.modal [data-act="cancel"]');
   await page.waitForSelector(".modal", { state: "detached", timeout: 5000 });
 
+  // ============ P. 长任务的反馈：已用时 / 跑完据实报变化 ============
+  // 真跑 s00 要走 ASR，几分钟。这里要验的是「跑的时候界面给什么」，
+  // 把 /api/run 与心跳换成受控响应就能精确停在 running 态，不必真的跑。
+  // 注意这只能证明受控路径：真实 run 的耗时分布不在这里的覆盖范围。
+  console.log("[P] 长任务反馈：已用时 / 选区收敛");
+  const stubRun = (id: string, status: "running" | "done", started: string) => ({
+    id,
+    owner: "jobs/ui-j1",
+    step: "s00",
+    mode: null,
+    status,
+    started_at: started,
+    updated_at: started,
+    finished_at: status === "done" ? new Date().toISOString() : null,
+    message: status === "done" ? "完成" : "本地转写（Paraformer）…",
+    error: null,
+  });
+  await page.goto(`${base}/#/job/ui-j1`);
+  await page.waitForSelector("#job-sents .sent", { timeout: 8000 });
+  // 假装已经跑了 65 秒：用它证明起算点是服务端 started_at，而不是点下去那一刻
+  const runStarted = new Date(Date.now() - 65000).toISOString();
+  await page.route("**/api/run", (route) => route.fulfill({ json: stubRun("r-stub", "running", runStarted) }));
+  await page.route("**/api/runs/r-stub", (route) => route.fulfill({ json: stubRun("r-stub", "running", runStarted) }));
+  await page.click("#run-s00");
+  await page.waitForSelector(".modal", { timeout: 10000 });
+  await page.click('.modal [data-act="ok"]');
+  await page.waitForSelector(".elapsed", { timeout: 8000 });
+  await page.waitForTimeout(1100); // 至少走一个 800ms 心跳，确认它真的在更新
+  const el = await page.evaluate(() => ({
+    text: document.querySelector(".elapsed")?.textContent ?? "",
+    hidden: document.querySelector(".elapsed")?.getAttribute("aria-hidden"),
+    msg: document.getElementById("run-status")?.textContent ?? "",
+  }));
+  check(`已用时按「分:秒」显示（实测「${el.text}」）`, /已用 \d+:\d\d/.test(el.text), true);
+  check(`已用时从服务端 started_at 起算，不是点下去那刻（实测「${el.text}」）`, /已用 1:\d\d/.test(el.text), true);
+  check("已用时对读屏隐藏", el.hidden, "true");
+  check("已用时不在 live region 里（否则每 800ms 念一次秒表）", el.msg.includes("已用"), false);
+  check(`状态位仍在报真实阶段（实测「${el.msg}」）`, el.msg.includes("本地转写"), true);
+
+  await page.unroute("**/api/run");
+  await page.unroute("**/api/runs/r-stub");
+  await page.goto(`${base}/#/`); // 离开该页：轮询见 statusEl 断连即退出
+  await page.waitForSelector("#nj-go", { timeout: 8000 });
+
+  // ---- 跑完据实报变化：句数与选区要分开说 ----
+  await page.goto(`${base}/#/job/ui-j1`);
+  await page.waitForSelector("#job-sents .sent", { timeout: 8000 });
+  await page.click('#job-sents .sent[data-idx="0"] [data-act="i"]');
+  await page.click('#job-sents .sent[data-idx="3"] [data-act="j"]');
+  check("前置：选区覆盖 4 句（否则后两条是空转）", ((await page.textContent("#sel-info")) ?? "").includes("4 句"), true);
+  const beforeSentences = (await (await fetch(`${base}/api/jobs/ui-j1/sentences`)).json()) as {
+    sentences: unknown[];
+  };
+  const fewerSentences = { ...beforeSentences, sentences: beforeSentences.sentences.slice(0, 2) };
+  await page.route("**/api/run", (route) => route.fulfill({ json: stubRun("r-stub2", "done", new Date().toISOString()) }));
+  // 心跳也要拦：只拦 /api/run 的话，第一轮心跳打到真实服务拿到 404，
+  // runAndPoll 按「连续 3 次失联」判失败直接 return，根本走不到报告那句（本轮踩过）。
+  await page.route("**/api/runs/r-stub2", (route) => route.fulfill({ json: stubRun("r-stub2", "done", new Date().toISOString()) }));
+  await page.route("**/api/jobs/ui-j1/sentences", (route) => route.fulfill({ json: fewerSentences }));
+  await page.click("#run-s00");
+  await page.waitForSelector(".modal", { timeout: 10000 });
+  await page.click('.modal [data-act="ok"]');
+  // 不直接等 .toast：它是被测行为，等不到会变成超时**中断**（输出「0 failed」，比红更难发现）。
+  // 先等一个中立的完成信号，再读 toast 是否存在，缺失时让断言去红。
+  let toastText = "";
+  try {
+    await page.waitForSelector(".toast", { timeout: 6000 });
+    toastText = (await page.textContent(".toast")) ?? "";
+  } catch {
+    toastText = "(没出现 toast)";
+  }
+  check(`跑完据实报句数变化（实测「${toastText}」）`, /句子 \d+ → \d+/.test(toastText), true);
+  check(`并同时报选区收敛，不是只报句数（实测「${toastText}」）`, /选区 \d+–\d+ → \d+–\d+/.test(toastText), true);
+  await page.unroute("**/api/run");
+  await page.unroute("**/api/runs/r-stub2");
+  await page.unroute("**/api/jobs/ui-j1/sentences");
+
   check("全程没有出现原生 alert/confirm/prompt", nativeDialogs, 0);
 
   // ---- 截图：布局塌陷、圆点隐形这类问题只有看图才发现 ----

@@ -1856,6 +1856,64 @@ try {
   check(`取消不存在的 run 返回 404（实测 ${missCancel.status}）`, missCancel.status, 404);
   await page.unroute("**/api/run");
   await page.unroute(cancelRoute);
+
+  // ---- [R] 转写连续进度：视觉连续，播报离散 ----
+  // 这条要守的是**位置**而不是「有没有这个数字」：进度每块音频变一次，
+  // 放进角色为 status 的区域里，读屏会一路念「2:15 / 10:00」，比没有进度更糟。
+  console.log("\n[R] 转写进度：看得见，但不进 live region");
+  await page.goto(`${base}/#/job/ui-j1`);
+  await page.waitForSelector("#job-sents .sent", { timeout: 8000 });
+  await page.route("**/api/run", (route) => route.fulfill({ json: stubRun("r-prog", "running", new Date().toISOString()) }));
+  const progSteps = ["0:03 / 10:00", "2:15 / 10:00", "7:40 / 10:00"];
+  let progIdx = 0;
+  let progDone = false;
+  await page.route(/\/api\/runs\/r-prog$/, (route) =>
+    route.fulfill({
+      json: progDone
+        ? { ...stubRun("r-prog", "done", new Date().toISOString()), message: "本地转写 8 句（paraformer）" }
+        : {
+            ...stubRun("r-prog", "running", new Date().toISOString()),
+            progress_detail: progSteps[Math.min(progIdx++, progSteps.length - 1)],
+          },
+    }),
+  );
+  await page.click("#run-s00");
+  await page.waitForSelector(".modal", { timeout: 10000 });
+  await page.click('.modal [data-act="ok"]');
+  // 等待条件不能依赖被测行为：既不能等「prog 是 status 的兄弟」，也不能只等「它存在」——
+  // 它刚被创建时内容还是空的，而此时第一轮心跳（800ms）可能还没到。
+  // 这里等的是「它说出了读数」，但**等不到只让它红、不让它中断**：
+  // 中断会输出「N passed / 0 failed」，比红更难发现。
+  try {
+    await page.waitForFunction(() => (document.querySelector(".prog")?.textContent ?? "").length > 0, { timeout: 8000 });
+  } catch {
+    /* 等不到就交给下面的 check 判红 */
+  }
+  const progPos = await page.evaluate(() => {
+    const status = document.getElementById("run-status");
+    const prog = document.querySelector(".prog");
+    return {
+      exist: Boolean(prog),
+      text: prog?.textContent ?? "",
+      insideLive: status?.contains(prog ?? null) ?? false,
+      hidden: prog?.getAttribute("aria-hidden") === "true",
+    };
+  });
+  check(`进度旁注显示「已处理 / 总长」（实测「${progPos.text}」）`, /^\d+:\d{2} \/ \d+:\d{2}$/.test(progPos.text), true);
+  // 三条都必须带 exist 前置：元素压根没渲染出来时，`contains(null)` / `getAttribute(null)`
+  // 都会返回让它「通过」的值——缺陷于是被读成合规（注入实测到两次）。
+  check("进度旁注不在 live region 里（否则读屏会一路念数字）", progPos.exist && !progPos.insideLive, true);
+  check("进度旁注对读屏隐藏（视觉有、播报无）", progPos.exist && progPos.hidden, true);
+  const p1 = progPos.text;
+  await page.waitForTimeout(2000); // 至少两轮 800ms 心跳，让桩换一条读数
+  const p2 = await page.evaluate(() => document.querySelector(".prog")?.textContent ?? "");
+  check(`进度在界面上真的在推进（实测「${p1}」→「${p2}」）`, p1 !== p2 && p2.length > 0, true);
+  progDone = true;
+  await page.waitForTimeout(2000);
+  check("跑完把进度旁注撤掉（不留一条停住的刻度）", await page.evaluate(() => document.querySelectorAll(".prog").length), 0);
+  await page.unroute("**/api/run");
+  await page.unroute(/\/api\/runs\/r-prog$/);
+
   await page.goto(`${base}/#/`);
   await page.waitForSelector("#nj-go", { timeout: 8000 });
 
@@ -1864,7 +1922,9 @@ try {
   // ---- 截图：布局塌陷、圆点隐形这类问题只有看图才发现 ----
   await page.goto(`${base}/#/`);
   await page.waitForSelector(".step");
-  const shot = path.join(process.env.TEMP ?? "/tmp", "slice-ui-smoke-shot.png");
+  // 截图放系统临时目录，跟着 ROOT 一起（scratchdir 把 TEMP 改到了项目盘 work/_scratch，
+  // 用 process.env.TEMP 就会每跑一次在项目里留一张 100KB 的 png——「一跑一份」的又一处）。
+  const shot = path.join(SYSTEM_TEMP, "slice-ui-smoke-shot.png");
   await page.screenshot({ path: shot, fullPage: true });
   console.log(`\n截图：${shot}`);
 } catch (e) {

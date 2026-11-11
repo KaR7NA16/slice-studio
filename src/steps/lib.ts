@@ -123,5 +123,11 @@ async function patchRun(root: string, runId: string, patch: Partial<RunRecord>):
 export const progress = (root: string, runId: string, message: string): Promise<void> =>
   patchRun(root, runId, { message });
 
+// 连续进度走单独字段，不走 message：message 进 live region，读屏会念，
+// 「2:15 / 8:00」这种每秒变一次的数字念出来就没法用了。
+export const reportProgress = (root: string, runId: string, detail: string | null): Promise<void> =>
+  patchRun(root, runId, { progress_detail: detail });
+
 export const finishRun = (root: string, runId: string, status: "done" | "error", message: string, error: string | null): Promise<void> =>
-  patchRun(root, runId, { status, message, error, finished_at: new Date().toISOString() });
+  // 收尾必须把进度抹掉：留着「已处理 2:15」而状态已经 done，界面上就是一条永远停在 2:15 的旁注。
+  patchRun(root, runId, { status, message, error, finished_at: new Date().toISOString(), progress_detail: null });

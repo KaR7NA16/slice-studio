@@ -225,6 +225,9 @@ export async function cancelRun(root: string, id: string): Promise<RunRecord | n
     ...rec,
     status: "cancelled",
     message: "已取消",
+    // 取消也得把连续进度抹掉，否则界面上会留一条「已处理 3:40」配着「已取消」，
+    // 读起来像「它还在跑到 3:40」。
+    progress_detail: null,
     updated_at: now,
     finished_at: now,
   };

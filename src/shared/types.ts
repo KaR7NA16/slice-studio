@@ -305,6 +305,10 @@ export interface RunRecord {
   updated_at: string;
   finished_at: string | null;
   message: string;
+  // 连续度量（如「已处理 2:15 / 8:00」），与 message 分开存：
+  // message 会进 live region，读屏会念；这类每秒变的数字念出来就是骚扰。
+  // UI 把它渲染成 aria-hidden 的旁注——视觉连续、播报离散。
+  progress_detail?: string | null;
   error: string | null;
 }
 

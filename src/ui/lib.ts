@@ -202,7 +202,14 @@ export async function runAndPoll(
   cancelBtn.type = "button";
   cancelBtn.className = "minibtn";
   cancelBtn.textContent = "取消";
-  statusEl.insertAdjacentElement("afterend", cancelBtn);
+  elapsedEl.insertAdjacentElement("afterend", cancelBtn);
+  // 连续进度（「已处理 2:15 / 8:00」）同样挂成 live region 的兄弟节点：
+  // 它每块音频变一次，进 role=status 就是让读屏一直念数字。
+  // 播报交给 message（阶段文案），视觉交给这里 —— 视觉连续、播报离散。
+  const progEl = document.createElement("span");
+  progEl.className = "prog";
+  progEl.setAttribute("aria-hidden", "true");
+  elapsedEl.insertAdjacentElement("beforebegin", progEl);
   cancelBtn.addEventListener("click", async () => {
     cancelBtn.disabled = true;
     cancelBtn.textContent = "取消中…";
@@ -249,11 +256,14 @@ export async function runAndPoll(
         setMsg(statusEl, `失败：${cur.error ?? cur.message}`, "err");
         return false;
       }
+      // 阶段文案进 live region（事件该被念），连续进度进 aria-hidden 旁注（数字不该被念）
       setMsg(statusEl, cur.message, "busy");
+      progEl.textContent = cur.progress_detail ?? "";
     }
   } finally {
     elapsedEl.remove();
     cancelBtn.remove();
+    progEl.remove();
   }
 }
 

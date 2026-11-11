@@ -154,6 +154,20 @@ async function runAndWait(owner: string, step: string, mode: string | null): Pro
   throw new Error(`run 超时：${owner} ${step}`);
 }
 
+// 与 runAndWait 同，但把轮询期间见过的 progress_detail 全收集起来。
+// 「进度只写在终态记录里」是查不出问题的——收尾会清空它，必须在中途采样。
+async function runAndSample(owner: string, step: string): Promise<{ rec: RunRecord; details: string[] }> {
+  const rec = await api<RunRecord>("/api/run", { method: "POST", body: JSON.stringify({ owner, step, mode: null }) });
+  const details: string[] = [];
+  for (let i = 0; i < 300; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    const cur = await api<RunRecord>(`/api/runs/${rec.id}`);
+    if (cur.progress_detail && details.at(-1) !== cur.progress_detail) details.push(cur.progress_detail);
+    if (cur.status !== "running") return { rec: cur, details };
+  }
+  throw new Error(`run 采样超时：${owner} ${step}`);
+}
+
 const stepState = (s: Survey, ownerKind: "jobs" | "clips", id: string, step: string): string =>
   s[ownerKind].find((o) => o.id === id)?.steps.find((st) => st.step === step)?.status ?? "missing";
 
@@ -170,6 +184,10 @@ async function main(): Promise<void> {
   await makeVideo(video);
   await writeFile(srt, SRT, "utf8");
 
+  // 服务进程继承这里的环境：把转写切成小块，进度才会连续来几条、采样才抓得住。
+  // 默认 30s 一块在 10s 夹具上只报一次，那一次大概率落在两次轮询之间，等于没测。
+  // 只影响这条验证，产品默认值不动（切太碎会掉识别质量，见 asr_worker.py 的注释）。
+  process.env["SLICE_ASR_CHUNK_SEC"] = "3";
   server = spawn(process.execPath, [path.join(ROOT, "src", "server", "main.ts"), VROOT], { stdio: ["ignore", "pipe", "inherit"] });
   port = await new Promise<number>((resolve, reject) => {
     let buf = "";
@@ -216,11 +234,26 @@ async function main(): Promise<void> {
     method: "POST",
     body: JSON.stringify({ video_path: asrVideo, srt_path: null }),
   });
-  const rAsr = await runAndWait(`jobs/${asrJob}`, "s00", null);
+  const { rec: rAsr, details: asrDetails } = await runAndSample(`jobs/${asrJob}`, "s00");
   check("无 SRT 时 s00 走转写并成功", rAsr.status === "done", rAsr.message);
   // 文案本身就区分了两条路（「本地转写 N 句」vs「解析 N 句」），所以它能证明走的是哪一支，
   // 不是只看「没报错」——没报错也可能是走了 SRT 分支而 srt 恰好不存在。
   check("确认走的是转写分支", rAsr.message.includes("本地转写"), rAsr.message);
+  // 服务层有没有把 worker 的进度搬到 run 记录上：采样看得见多个不同值才算数。
+  // 只在终态查是查不出来的——收尾会把 progress_detail 清掉（下一条正是断言这件事）。
+  check("转写过程中连续进度被写进 run 记录", asrDetails.length >= 2, asrDetails.join(" | "));
+  check(
+    "连续进度是「已处理 / 总长」的读数，不是百分比或空串",
+    // 带上长度前置同前：空数组 every 恒真，不写就是一条只会在别的判据红时才「看起来对」的假判据。
+    asrDetails.length >= 2 && asrDetails.every((d) => /^\d+:\d{2} \/ \d+:\d{2}$/.test(d)),
+    asrDetails.join(" | "),
+  );
+  check(
+    "连续进度在推进（不是同一个值反复写）",
+    new Set(asrDetails).size >= 2,
+    String(new Set(asrDetails).size),
+  );
+  check("跑完把连续进度抹掉了（否则界面停在最后一格）", rAsr.progress_detail == null, String(rAsr.progress_detail));
   const asrSent = await api<SentencesFile>(`/api/jobs/${asrJob}/sentences`);
   check("转写真的出了句子（不是空跑通过）", asrSent.sentences.length >= 2, String(asrSent.sentences.length));
   // 时间码必须落在音频真实时长内：出句但时间码越界，等于 VAD 切分或偏移有问题。
@@ -233,6 +266,40 @@ async function main(): Promise<void> {
   );
   check("转写路径跑完自己的临时件也清掉了", !(await exists(path.join(VROOT, "work", "jobs", asrJob, "_asr"))));
   check("转写作了缓存并登记 job.srt", await exists(path.join(VROOT, "work", "jobs", asrJob, "s00", "job.srt")));
+
+  // A4. 转写进度的**数据侧**：worker 每切一块就报一次「已处理到哪儿」。
+  //     这里不经过服务、也不经过界面——那两层各有自己的判据，这条只证明进度本身在单调推进。
+  //     必须调小切块：10s 音频按默认 30s 切只有一块、只报一次，「递增」无从证明。
+  //     （副作用已知：切太碎会掉识别质量，所以 chunk-sec 只用于验证，不改产品默认值。）
+  const PY = path.join(ROOT, "tools", "python", "venv", "Scripts", "python.exe");
+  const progWav = path.join(VROOT, "prog.wav");
+  await execFileP(FFMPEG, ["-y", "-v", "error", "-i", asrVideo, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", progWav]);
+  const pyOut = await execFileP(
+    PY,
+    ["-m", "asr_worker", "--audio", progWav, "--model-dir", path.join(ROOT, "models", "asr"), "--chunk-sec", "3"],
+    {
+      cwd: path.join(ROOT, "tools"),
+      env: { ...process.env, PYTHONPATH: path.join(ROOT, "tools"), PYTHONIOENCODING: "utf-8" },
+      maxBuffer: 8 * 1024 * 1024,
+    },
+  );
+  const progEvents = pyOut.stdout
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith("{"))
+    .map((l) => JSON.parse(l) as { done_sec?: number; total_sec?: number })
+    .filter((o): o is { done_sec: number; total_sec: number } => typeof o.done_sec === "number" && typeof o.total_sec === "number");
+  check("进度事件不止一条（切多块才可能递增）", progEvents.length >= 2, String(progEvents.length));
+  check(
+    "进度单调递增（不是原地跳或倒退）",
+    progEvents.every((e, i) => i === 0 || e.done_sec > progEvents[i - 1]!.done_sec),
+    progEvents.map((e) => e.done_sec).join("→"),
+  );
+  check(
+    "进度末值落在音频总长上（分母是真的，不是估的）",
+    progEvents.length > 0 && Math.abs(progEvents.at(-1)!.done_sec - progEvents.at(-1)!.total_sec) < 0.5,
+    progEvents.length ? `${progEvents.at(-1)!.done_sec} / ${progEvents.at(-1)!.total_sec}` : "(无进度)",
+  );
 
   // B. 手动建片段（含 ffprobe 真实探测 fps）
   const { id: clipId } = await api<{ id: string }>("/api/clips", {

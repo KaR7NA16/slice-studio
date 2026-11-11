@@ -236,6 +236,11 @@ def main() -> int:
     ap.add_argument("--max-sentence", type=float, default=20.0)
     ap.add_argument("--tail", type=float, default=0.3, help="末字到句尾的补偿秒数")
     ap.add_argument("--threads", type=int, default=0)
+    # 切块秒数。默认 30，不要因为「进度更细」就调小：实测 10s 音频切到 3s 一块后，
+    # 同段音频的识别结果从「各组比率按样本量做的加权平均」退化成
+    # 「组比比按按本量做的恰真平倦」——上下文被切碎，Paraformer 的准确率直接掉。
+    # 调小只用于验证（确认「进度在动」需要至少两块），不是产品参数。
+    ap.add_argument("--chunk-sec", type=float, default=30.0)
     args = ap.parse_args()
 
     if not os.path.isfile(args.audio):
@@ -318,7 +323,7 @@ def main() -> int:
     # 长音频切块：Paraformer 单次推理对长音频显存/内存与时延都不友好。
     # 切点选在**能量最低处**（而不是硬切整秒），避免把字切成两半。
     chunks = []
-    win = 30.0
+    win = max(1.0, args.chunk_sec)
     if audio_len <= win:
         chunks = [(0, len(samples))]
     else:
@@ -336,6 +341,7 @@ def main() -> int:
             pos = end
 
     pairs = []
+    total_sec = audio_len
     for start_i, end_i in chunks:
         if end_i - start_i < int(0.1 * SAMPLE_RATE):
             continue
@@ -343,6 +349,9 @@ def main() -> int:
         got = decode_chunk(sess, samples[start_i:end_i], neg_mean, inv_std, tokens, input_name, len_name, out_names)
         for t, ch in got:
             pairs.append((None if t is None else t + offset, ch))
+        # 进度报的是**真实音频位置**（这块结束处的采样点），不是按块数估的百分比——
+        # 块长不等（切点在能量最低处），按块数算出来的百分比会跳。
+        emit({"done_sec": round(end_i / SAMPLE_RATE, 1), "total_sec": round(total_sec, 1)})
 
     if not pairs:
         emit({"ok": False, "error": "转写结果里没有可用文本（音频可能是静音或纯噪声）"})

@@ -268,6 +268,10 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .elapsed { margin-left: var(--pad-1); font-size: var(--fs-sm); color: var(--text-muted); font-variant-numeric: tabular-nums; }
 /* 取消按钮紧跟在已用时后面，与状态位本身分开一点，免得读成一个整体 */
 .elapsed + .minibtn { margin-left: var(--pad-2); }
+/* 连续进度比「已用时」重要一档（它回答的是「还要多久」），所以用次级正文色而不是 muted。
+   空内容时整段不占位：不知道进度时留一段空白，比留一条空边距更像坏了。 */
+.prog { margin-left: var(--pad-1); font-size: var(--fs-sm); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.prog:empty { display: none; }
 
 .file-chip {
   display: inline-flex; align-items: center; gap: 6px; min-width: 0;

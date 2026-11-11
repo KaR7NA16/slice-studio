@@ -10,8 +10,14 @@ import { promisify } from "node:util";
 import type { JobFile, Sentence, SentencesFile } from "../shared/types.ts";
 import { readJson, writeJsonAtomic } from "../server/jsonfile.ts";
 import { shipped } from "../server/shipped.ts";
-import { finishStep, inputRef, progress, removeQuietly, stepDir, workDir } from "./lib.ts";
+import { finishStep, inputRef, progress, removeQuietly, reportProgress, stepDir, workDir } from "./lib.ts";
 import { pythonChildEnv } from "./toolenv.ts";
+
+// 「已处理 2:15」用分:秒，与界面上的已用时长同一口径，不出现 135.4 秒这种读数。
+const mmss = (sec: number): string => {
+  const s = Math.max(0, Math.round(sec));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
 
 const execFileP = promisify(execFile);
 // 代码目录 ≠ 数据根：解释器与 ffmpeg 在仓库里。权重优先数据根，没有就用程序目录里随包的那份。
@@ -83,19 +89,57 @@ async function transcribe(root: string, runId: string, video: string, tmpDir: st
   const allowDownload = process.env["SLICE_ASR_ALLOW_DOWNLOAD"] === "1";
   const args = ["-m", "asr_worker", "--audio", wav, "--model-dir", modelDir];
   if (allowDownload) args.push("--allow-download");
+  // 只有验证要改切块粒度：10s 音频按默认 30s 切只出一块、只报一次进度，
+  // 「进度在动」这件事在那种场景下无论怎么写都证明不了自己。
+  const chunkSec = process.env["SLICE_ASR_CHUNK_SEC"];
+  if (chunkSec) args.push("--chunk-sec", chunkSec);
   await progress(root, runId, "本地转写（Paraformer）…");
+
+  // 进度上报必须串行：patchRun 是「读→改→原子写」，两次并发就是后写的覆盖先写的，
+  // 界面上表现为进度来回跳。用一条 promise 链排队，收尾前 await 掉。
+  let queue: Promise<void> = Promise.resolve();
+  const enqueue = (fn: () => Promise<void>): void => {
+    queue = queue.then(fn).catch(() => undefined); // 写进度失败不该让转写失败
+  };
 
   const raw = await new Promise<string>((resolve, reject) => {
     const child = spawn(PYTHON, args, {
       cwd: WORKER_DIR,
       env: pythonChildEnv(process.env, { PYTHONPATH: WORKER_DIR, PYTHONIOENCODING: "utf-8" }, path.join(root, "work", "_scratch")),
     });
-    let out = "";
+    let out = ""; // 全量留底：解析失败时要拿它拼错误文案
+    let buf = ""; // 还没凑成一行的尾巴
     let err = "";
-    child.stdout.on("data", (d: Buffer) => (out += d.toString()));
+    const handleLine = (line: string): void => {
+      const t = line.trim();
+      if (!t.startsWith("{")) return; // 库日志混进来，忽略
+      let o: { progress?: string; done_sec?: number; total_sec?: number };
+      try {
+        o = JSON.parse(t) as typeof o;
+      } catch {
+        return; // 半行/坏行不该让整次转写失败
+      }
+      if (typeof o.done_sec === "number" && typeof o.total_sec === "number") {
+        enqueue(() => reportProgress(root, runId, `${mmss(o.done_sec!)} / ${mmss(o.total_sec!)}`));
+      } else if (typeof o.progress === "string") {
+        // 阶段文案（下载权重、权重落位）是**事件**，进 message → 读屏该念。
+        enqueue(() => progress(root, runId, o.progress!));
+      }
+    };
+    child.stdout.on("data", (d: Buffer) => {
+      const s = d.toString();
+      out += s;
+      buf += s;
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        handleLine(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+      }
+    });
     child.stderr.on("data", (d: Buffer) => (err += d.toString()));
     child.on("error", reject);
     child.on("exit", (code) => {
+      if (buf.trim()) handleLine(buf); // 最后一行没带换行符
       if (code !== 0) {
         reject(new Error(`ASR 进程退出 ${code}：${(err || out).trim().slice(0, 300)}`));
         return;
@@ -103,6 +147,7 @@ async function transcribe(root: string, runId: string, video: string, tmpDir: st
       resolve(out || err);
     });
   });
+  await queue; // 不 await 的话，进度可能写在 finishRun 之后，界面上留一条永远停在 1:20 的旁注
 
   // worker 的 stdout 是 JSON lines（它把真 fd 1 让给了 JSON，库日志走 stderr）。
   // 取**最后一行**能解析的：任何库在退出前多打一行都不该让整次转写失败。
